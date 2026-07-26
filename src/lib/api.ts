@@ -50,6 +50,18 @@ export const api = {
     return result.profile
   },
 
+  async teacherFirstSetup(teacherId: string, phoneLast4: string, pin: string): Promise<AuthenticatedProfile> {
+    if (isDemoMode) {
+      if (phoneLast4 !== '0000') return Promise.reject(new Error('미리보기 본인 확인 번호는 0000입니다.'))
+      return teacherId === 'executive-1' ? demoExecutive : { id: teacherId, name: '김은혜', role: 'teacher', crewId: 'crew-2', crewName: '은혜 크루' }
+    }
+    const result = await invoke<{ accessToken: string; refreshToken: string; profile: AuthenticatedProfile }>('teacher-first-setup', { teacherId, phoneLast4, pin })
+    const { error } = await supabase.auth.setSession({ access_token: result.accessToken, refresh_token: result.refreshToken })
+    if (error) throw error
+    localStorage.setItem('crew-login-at', String(Date.now()))
+    return result.profile
+  },
+
   async executiveDemoLogin(): Promise<AuthenticatedProfile> {
     if (!isDemoMode) throw new Error('임원 계정을 선택한 뒤 PIN을 입력해주세요.')
     return demoExecutive

@@ -20,16 +20,16 @@ npx supabase db push
 
 ## 3. 서버 비밀값과 함수
 
-충분히 긴 임의 문자열 두 개와 Web Push용 VAPID 키 쌍을 준비합니다.
+서로 다른 충분히 긴 임의 문자열 세 개와 Web Push용 VAPID 키 쌍을 준비합니다.
 
 ```powershell
 npx web-push generate-vapid-keys
-npx supabase secrets set PIN_PEPPER="<32자 이상 임의 문자열>" BOOTSTRAP_ADMIN_CODE="<일회용 초기 설정 코드>"
+npx supabase secrets set PIN_PEPPER="<32자 이상 임의 문자열>" ACTIVATION_PEPPER="<PIN_PEPPER와 다른 32자 이상 문자열>" BOOTSTRAP_ADMIN_CODE="<일회용 초기 설정 코드>"
 npx supabase secrets set VAPID_PUBLIC_KEY="<생성된 Public Key>" VAPID_PRIVATE_KEY="<생성된 Private Key>" VAPID_SUBJECT="https://changhyun-leek.github.io/crew-attendance/"
 npx supabase functions deploy crew-api --no-verify-jwt
 ```
 
-`PIN_PEPPER`는 변경하면 기존 교사의 PIN 로그인이 불가능해집니다. `VAPID_PRIVATE_KEY`를 바꾸면 기존 알림 구독을 다시 받아야 할 수 있으므로 두 값 모두 안전하게 보관합니다.
+`PIN_PEPPER`는 변경하면 기존 교사의 PIN 로그인이 불가능해집니다. `ACTIVATION_PEPPER`는 최초 PIN 본인 확인값을 만드는 별도 키입니다. `VAPID_PRIVATE_KEY`를 바꾸면 기존 알림 구독을 다시 받아야 할 수 있으므로 모두 안전하게 보관합니다.
 
 ## 4. 최초 임원 계정
 
@@ -47,15 +47,25 @@ npx supabase functions deploy crew-api --no-verify-jwt
 
 이후 교사·임원·크루는 임원 화면에서 등록합니다.
 
-## 5. 검증 후 GitHub Pages 전환
+## 5. 2026 교적부 명단 이관
+
+최초 임원으로 로그인한 뒤, 로컬 교적부 PDF를 `scripts/import_2026_roster.py`로 한 번만 이관합니다. 스크립트는 이름·크루·휴대폰 끝 4자리만 메모리에서 처리하며 생년월일, 주소, 학교, 부모 정보, 비고는 읽거나 전송하지 않습니다. 휴대폰 끝 4자리는 서버에서 즉시 HMAC으로 바뀌며 원문으로 저장되지 않습니다.
+
+- 일반 크루 22개, 학생 136명, 새가족 1명, 교사 34명 수가 맞지 않으면 자동 중단됩니다.
+- `구예영크루` 담당자는 이관 시 `김유진` 선생님으로 배정됩니다.
+- 기존 계정과 출석 기록은 보존하고 새 명단만 보충합니다.
+- 실행에 필요한 임원 액세스 토큰은 명령줄이나 문서에 쓰지 말고 현재 PowerShell 세션의 `CREW_ADMIN_ACCESS_TOKEN` 환경변수로만 전달합니다.
+
+## 6. 검증 후 GitHub Pages 전환
 
 1. `npm run check`
 2. 데모 화면과 실제 Supabase 연결 화면 확인
 3. 교사 기기에서 `알림 켜기` 후 임원 화면에서 독려 알림 수신 확인
-4. 교사 본인 PIN 변경과 새 PIN 재로그인 확인
-5. 기존/신규 명단 수와 날짜별 출석 건수 비교
-6. GitHub Actions secret `VITE_SUPABASE_PUBLISHABLE_KEY` 등록
-7. Pages Source를 `GitHub Actions`로 변경
-8. main 브랜치 배포
+4. 새 교사의 `처음 사용` 본인 확인과 PIN 설정, 기존 교사의 PIN 변경·재로그인 확인
+5. `교적부 XLSX`를 실제 Excel에서 열어 12개 열, 크루 병합, 빈 개인정보 열 확인
+6. 기존/신규 명단 수와 날짜별 출석 건수 비교
+7. GitHub Actions secret `VITE_SUPABASE_PUBLISHABLE_KEY` 등록
+8. Pages Source를 `GitHub Actions`로 변경
+9. main 브랜치 배포
 
 기존 테이블은 30일 동안 삭제하지 말고 읽기 전용 백업으로 유지합니다.

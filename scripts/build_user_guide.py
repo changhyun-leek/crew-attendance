@@ -221,6 +221,9 @@ def add_list_item(doc, text, num_id, bold_prefix=None):
 
 def add_heading(doc, text, level=1):
     p = doc.add_paragraph(text, style=f"Heading {level}")
+    if getattr(doc, "_next_page_break", False):
+        p.paragraph_format.page_break_before = True
+        doc._next_page_break = False
     for run in p.runs:
         set_font(run, size={1: 16, 2: 13, 3: 12}[level], color=PRIMARY if level < 3 else PURPLE, bold=True)
     return p
@@ -307,8 +310,10 @@ def set_header_footer(section):
 
 
 def page_break(doc):
-    p = doc.add_paragraph()
-    p.add_run().add_break(WD_BREAK.PAGE)
+    # Apply the break to the next heading. An empty paragraph containing a page
+    # break can be pushed to the next page when the previous page is full,
+    # leaving a completely blank page in Word/PDF output.
+    doc._next_page_break = True
 
 
 def build():
@@ -364,10 +369,11 @@ def build():
     for text in (
         "크루교사, 임원교사, 보조교사 중 본인의 역할을 누릅니다.",
         "크루교사와 임원교사는 이름을 누르거나 검색창에서 이름을 찾습니다.",
-        "숫자 PIN 4~6자리를 입력하고 확인 표시를 누릅니다.",
+        "이름 옆에 처음 사용이 보이면 본인 휴대폰 번호 끝 4자리로 확인하고 새 PIN을 직접 정합니다. 이미 설정한 교사는 기존 PIN을 입력합니다.",
         "개인 기기에서는 로그인이 최대 30일 유지됩니다. 공용 기기에서는 사용 후 반드시 로그아웃합니다.",
     ):
         add_list_item(doc, text, number_id)
+    add_callout(doc, "처음 사용하는 교사", "교적부에 등록된 본인 휴대폰 번호 끝 4자리와 앞으로 사용할 숫자 PIN 4~6자리를 입력합니다. 휴대폰 번호 원문은 저장되지 않고, 확인을 5회 틀리면 10분간 잠깁니다.", tone="gold")
     page_break(doc)
     add_heading(doc, "휴대폰·컴퓨터에 앱처럼 설치하기", 2)
     add_para(doc, "화면 왼쪽 아래의 앱 설치 버튼을 누르면 현재 기기에 맞는 순서가 큰 글씨로 표시됩니다. 설치 후에는 주소를 다시 찾지 않고 새벽이슬 아이콘으로 출석관리를 바로 열 수 있습니다.")
@@ -393,7 +399,8 @@ def build():
     for text in (
         "첫 화면에서 크루교사를 누릅니다.",
         "이름을 직접 누르거나 이름 검색에 이름 일부를 입력합니다.",
-        "PIN을 입력한 뒤 자동 설정된 이번 주 주일 날짜와 크루명을 확인합니다.",
+        "처음 사용 표시가 있으면 휴대폰 끝 4자리로 확인한 뒤 새 PIN을 두 번 입력합니다. 다음부터는 정한 PIN을 입력합니다.",
+        "로그인 뒤 자동 설정된 이번 주 주일 날짜와 크루명을 확인합니다.",
         "학생마다 출석 또는 결석을 누릅니다. 같은 상태를 다시 누르면 미체크로 돌아갑니다.",
         "결석 이유나 연락 결과가 있으면 사유·비고를 누르고 내용을 저장합니다.",
         "임원이 만든 임시 항목이 보이면 학생별 값을 선택합니다.",
@@ -405,12 +412,10 @@ def build():
     for text in (
         "새 학생은 학생 관리에서 이름을 입력해 추가합니다.",
         "오래 나오지 못하는 학생은 장기결석으로 바꾸고, 복귀하면 활동으로 되돌립니다.",
-        "더 이상 크루에 속하지 않는 학생은 삭제하지 않고 퇴실로 처리합니다.",
-        "학생 상태가 바뀌어도 과거 출석 기록은 그대로 유지됩니다.",
+        "더 이상 크루에 속하지 않는 학생은 삭제하지 않고 퇴실로 처리합니다. 학생 상태가 바뀌어도 과거 출석 기록은 그대로 유지됩니다.",
     ):
         add_list_item(doc, text, bullet_id)
 
-    page_break(doc)
     add_heading(doc, "3. 보조교사와 학생 보고사항", 1)
     add_heading(doc, "보조교사 출석체크", 2)
     add_para(doc, "보조교사는 개인 계정 없이 본인 이름을 입력하고 선택한 크루의 오늘 출석만 체크합니다. 화면 상단에는 현재 입력한 보조교사 이름이 표시됩니다.")
@@ -448,7 +453,7 @@ def build():
     for text in (
         "TXT: 단톡방 또는 일반 문서에 붙이기 쉬운 보고 문구입니다.",
         "CSV: Windows Excel에서 한글이 깨지지 않도록 UTF-8 BOM으로 저장됩니다.",
-        "Excel용 표 복사: 버튼을 누른 뒤 Excel 첫 셀에 붙여넣습니다.",
+        "교적부 XLSX: 기존 교적부의 12개 열과 크루별 묶음·병합 형식으로 내려받는 실제 Excel 파일입니다. 프로그램에 없는 개인정보 열은 빈칸이고 출석 결과와 사유는 비고에 표시됩니다.",
     ):
         add_list_item(doc, text, bullet_id, bold_prefix=text.split(":")[0] + ":")
     add_para(doc, "CSV 열 순서: 출석일, 크루, 학생명, 학생상태, 출석상태, 체크자구분, 체크자명, 체크시각, 최종수정시각", bold_prefix="CSV 열 순서:")
@@ -462,7 +467,8 @@ def build():
         add_list_item(doc, text, number_id)
     add_heading(doc, "교사 관리", 2)
     for text in (
-        "교사 이름, 처음 사용할 PIN, 담당교사 또는 임원교사 역할을 선택해 등록합니다.",
+        "2026 교적부에서 이관된 새 교사는 임원이 초기 PIN을 일일이 정하지 않습니다. 교사가 처음 접속할 때 본인 확인 후 직접 PIN을 정합니다.",
+        "이후 화면에서 새 교사를 개별 등록할 때는 임시 PIN과 역할을 입력하고, 첫 로그인 후 교사가 내 PIN 변경을 사용하도록 안내합니다.",
         "PIN을 잊은 교사의 새 PIN을 입력하고 PIN 초기화를 누릅니다.",
         "더 이상 사용하지 않는 계정은 비활성화하고, 필요하면 다시 활성화합니다.",
         "현재 로그인한 임원 본인 계정은 실수로 비활성화할 수 없습니다.",
@@ -499,17 +505,16 @@ def build():
     for text in (
         "교사가 역할, 화면, 문제 상황과 원하는 개선점을 적어 보냅니다.",
         "임원은 의견함에서 새 의견을 확인하고 확인 중으로 변경합니다.",
-        "수정 담당자가 데모 화면과 테스트로 변경을 확인합니다.",
-        "운영 배포 후 임원이 의견 상태를 완료로 변경합니다.",
+        "수정 담당자가 데모 화면과 테스트로 변경을 확인하고 운영 배포하면, 임원이 의견 상태를 완료로 변경합니다.",
     ):
         add_list_item(doc, text, number_id)
 
-    page_break(doc)
     add_heading(doc, "7. 로그인·PIN·개인정보 안전수칙", 1)
     add_table(doc, ["상황", "올바른 사용"], [
         ["개인 휴대폰·컴퓨터", "로그인을 최대 30일 유지해 반복 입력을 줄입니다."],
         ["교회 공용 기기", "업무가 끝나면 왼쪽 또는 상단의 로그아웃을 누릅니다."],
         ["PIN 5회 오류", "10분 동안 잠기므로 반복 입력하지 말고 기다립니다."],
+        ["최초 본인 확인", "본인 휴대폰 번호 끝 4자리로 한 번만 확인하고 PIN을 직접 정합니다."],
         ["PIN 분실", "임원교사가 교사 관리에서 새 PIN으로 초기화합니다."],
         ["PIN 변경", "출석 화면의 내 PIN 변경에서 현재 PIN 확인 후 새 PIN을 정합니다."],
         ["학생 개인정보", "사역에 필요한 최소 범위만 기록하고 화면 캡처에서는 가립니다."],
@@ -522,7 +527,7 @@ def build():
         "공용 기기에서는 반드시 로그아웃합니다.",
     ):
         add_list_item(doc, text, bullet_id)
-    add_callout(doc, "보안상 문서에 적지 않는 것", "현재 사용 중인 PIN과 비밀키는 이 설명서에 포함하지 않습니다. 초기 PIN 전달과 변경은 임원에게 별도로 확인합니다.", tone="gold")
+    add_callout(doc, "보안상 문서에 적지 않는 것", "현재 사용 중인 PIN과 비밀키는 이 설명서에 포함하지 않습니다. 새 교사는 임원에게 초기 PIN을 전달받지 않고 처음 사용 화면에서 본인 확인 후 직접 정합니다.", tone="gold")
 
     page_break(doc)
     add_heading(doc, "8. 문제가 생겼을 때", 1)
@@ -530,6 +535,7 @@ def build():
         ["인터넷 연결 경고", "출석 내용을 임시 메모", "연결 복구 후 다시 저장"],
         ["저장 실패 표시", "학생과 항목 확인", "재시도 후 의견함에 기록"],
         ["PIN 5회 오류", "10분 기다림", "임원에게 PIN 초기화 요청"],
+        ["처음 사용 확인 실패", "교적부 휴대폰 끝 4자리 확인", "계속 실패하면 임원에게 등록 정보 문의"],
         ["보조교사 이름 오류", "상단 이름 눌러 수정", "변경 이력에서 확인"],
         ["화면이 예전 모습", "새 버전 알림에서 업데이트", "없으면 새로고침 또는 Ctrl+F5"],
         ["긴급 출석 업무", "임원에게 즉시 알림", "종이·단톡방 기록 후 입력"],
@@ -585,7 +591,7 @@ def build():
         "공지와 임시 확인 항목의 종료일",
         "새 오류·개선 의견과 처리 상태",
         "비활성 교사, 종료 크루, 장기결석·퇴실 학생 정리",
-        "CSV 내보내기와 기존 출석 건수의 이상 여부",
+        "CSV와 교적부 XLSX 내보내기, 기존 출석 건수의 이상 여부",
     ):
         add_list_item(doc, text, bullet_id)
     add_callout(doc, "마지막 확인", "공용 기기라면 로그아웃합니다. 개인 기기에서는 자동 로그인을 이용하되, 다른 사람에게 기기를 빌려줄 때는 먼저 로그아웃합니다.", tone="gold")

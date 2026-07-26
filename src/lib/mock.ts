@@ -3,7 +3,7 @@ import { thisWeekSunday } from './date'
 
 export const demoCards: CrewLoginCard[] = [
   { teacherId: 'teacher-1', teacherName: '이창현', crewId: 'crew-1', crewName: '이창현 크루', role: 'teacher' },
-  { teacherId: 'teacher-2', teacherName: '김은혜', crewId: 'crew-2', crewName: '은혜 크루', role: 'teacher' },
+  { teacherId: 'teacher-2', teacherName: '김은혜', crewId: 'crew-2', crewName: '은혜 크루', role: 'teacher', needsSetup: true },
   { teacherId: 'teacher-3', teacherName: '박지훈', crewId: 'crew-3', crewName: '지훈 크루', role: 'teacher' },
   { teacherId: 'executive-1', teacherName: '임원 관리자', crewId: '', crewName: '전체 관리', role: 'executive' },
 ]

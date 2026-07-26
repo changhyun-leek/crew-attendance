@@ -10,6 +10,7 @@ export interface CrewLoginCard {
   crewId: string
   crewName: string
   role?: 'teacher' | 'executive'
+  needsSetup?: boolean
 }
 
 export interface Actor {

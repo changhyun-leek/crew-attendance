@@ -1,10 +1,12 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.57.4'
+// @ts-types="npm:@types/web-push@3.6.4"
 import webpush from 'npm:web-push@3.6.7'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const PUBLISHABLE_KEY = Deno.env.get('SUPABASE_PUBLISHABLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY')!
 const SECRET_KEY = Deno.env.get('SUPABASE_SECRET_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const PIN_PEPPER = Deno.env.get('PIN_PEPPER') ?? ''
+const ACTIVATION_PEPPER = Deno.env.get('ACTIVATION_PEPPER') ?? ''
 const BOOTSTRAP_ADMIN_CODE = Deno.env.get('BOOTSTRAP_ADMIN_CODE') ?? ''
 const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') ?? ''
 const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') ?? ''
@@ -57,6 +59,24 @@ async function derivePassword(profileId: string, pin: string): Promise<string> {
   const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${profileId}:${pin}`))
   const hex = Array.from(new Uint8Array(signed)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
   return `Crew!${hex}`
+}
+
+async function hmacHex(secret: string, value: string): Promise<string> {
+  if (!secret) throw new Error('최초 사용자 확인 서버 설정이 완료되지 않았습니다.')
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(signed)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function activationHash(profileId: string, phoneLast4: string): Promise<string> {
+  return hmacHex(ACTIVATION_PEPPER, `${profileId}:${phoneLast4}`)
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false
+  let difference = 0
+  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  return difference === 0
 }
 
 function randomToken(): string {
@@ -204,11 +224,14 @@ async function loginCards() {
   const { data: profiles, error } = await admin.from('profiles').select('id,display_name,role').eq('active', true).order('display_name')
   if (error) throw error
   const { data: assignments } = await admin.from('crew_assignments').select('profile_id,crew_id,crews(name)').is('ends_on', null)
+  const { data: credentials } = await admin.from('teacher_credentials').select('profile_id,pin_initialized')
   const assignmentMap = new Map((assignments ?? []).map((row: any) => [row.profile_id, row]))
+  const setupMap = new Map((credentials ?? []).map((row: any) => [row.profile_id, row.pin_initialized !== false]))
   return (profiles ?? []).flatMap((profile: any) => {
-    if (profile.role === 'executive') return [{ teacherId: profile.id, teacherName: profile.display_name, crewId: '', crewName: '전체 관리', role: 'executive' }]
+    const needsSetup = setupMap.get(profile.id) === false
+    if (profile.role === 'executive') return [{ teacherId: profile.id, teacherName: profile.display_name, crewId: '', crewName: '전체 관리', role: 'executive', needsSetup }]
     const assignment: any = assignmentMap.get(profile.id)
-    return assignment ? [{ teacherId: profile.id, teacherName: profile.display_name, crewId: assignment.crew_id, crewName: assignment.crews.name, role: 'teacher' }] : []
+    return assignment ? [{ teacherId: profile.id, teacherName: profile.display_name, crewId: assignment.crew_id, crewName: assignment.crews.name, role: 'teacher', needsSetup }] : []
   })
 }
 
@@ -218,6 +241,7 @@ async function teacherLogin(teacherId: unknown, pin: unknown) {
   if (profileError || !profile) throw new Error('사용할 수 없는 교사 계정입니다.')
   const { data: credential, error: credentialError } = await admin.from('teacher_credentials').select('*').eq('profile_id', teacherId).single()
   if (credentialError || !credential) throw new Error('로그인 설정이 완료되지 않았습니다.')
+  if (credential.pin_initialized === false) throw new Error('처음 사용 설정에서 본인 PIN을 먼저 정해주세요.')
   if (credential.locked_until && new Date(credential.locked_until) > new Date()) throw new Error('PIN을 여러 번 잘못 입력했습니다. 10분 후 다시 시도해주세요.')
 
   const password = await derivePassword(profile.id, pin)
@@ -229,6 +253,59 @@ async function teacherLogin(teacherId: unknown, pin: unknown) {
     throw new Error(count >= 5 ? 'PIN을 5회 잘못 입력해 10분간 잠겼습니다.' : `PIN이 올바르지 않습니다. (${count}/5)`)
   }
   await admin.from('teacher_credentials').update({ failed_count: 0, locked_until: null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+  const assignment: any = profile.role === 'teacher' ? await activeAssignment(profile.id) : null
+  return {
+    accessToken: authData.session.access_token,
+    refreshToken: authData.session.refresh_token,
+    profile: { id: profile.id, name: profile.display_name, role: profile.role, crewId: assignment?.crew_id, crewName: assignment?.crews?.name },
+  }
+}
+
+async function teacherFirstSetup(teacherId: unknown, phoneLast4: unknown, pin: unknown) {
+  if (typeof teacherId !== 'string' || typeof phoneLast4 !== 'string' || !/^\d{4}$/.test(phoneLast4) || !isPin(pin)) {
+    throw new Error('본인 확인 번호와 새 4~6자리 PIN을 확인해주세요.')
+  }
+  const { data: profile, error: profileError } = await admin.from('profiles').select('*').eq('id', teacherId).eq('active', true).single()
+  if (profileError || !profile) throw new Error('사용할 수 없는 교사 계정입니다.')
+  const { data: credential, error: credentialError } = await admin.from('teacher_credentials').select('*').eq('profile_id', teacherId).single()
+  if (credentialError || !credential) throw new Error('처음 사용 설정이 준비되지 않았습니다.')
+  if (credential.pin_initialized !== false) throw new Error('이미 PIN이 설정되었습니다. 기존 PIN으로 로그인해주세요.')
+  if (!credential.activation_phone_hash) throw new Error('본인 확인 정보가 등록되지 않았습니다. 임원에게 확인해주세요.')
+  if (credential.activation_locked_until && new Date(credential.activation_locked_until) > new Date()) throw new Error('본인 확인을 여러 번 실패했습니다. 10분 후 다시 시도해주세요.')
+
+  const matches = constantTimeEqual(await activationHash(profile.id, phoneLast4), credential.activation_phone_hash)
+  if (!matches) {
+    const count = Number(credential.activation_failed_count ?? 0) + 1
+    const locked = count >= 5
+    await admin.from('teacher_credentials').update({
+      activation_failed_count: locked ? 0 : count,
+      activation_locked_until: locked ? new Date(Date.now() + 10 * 60_000).toISOString() : null,
+      updated_at: new Date().toISOString(),
+    }).eq('profile_id', profile.id)
+    await admin.from('account_security_events').insert({ profile_id: profile.id, event_type: 'first_pin_setup_failed', metadata: { locked } })
+    throw new Error(locked ? '본인 확인을 5회 실패해 10분간 잠겼습니다.' : `휴대폰 번호 끝 4자리가 일치하지 않습니다. (${count}/5)`)
+  }
+
+  const { error: updateError } = await admin.auth.admin.updateUserById(profile.auth_user_id, { password: await derivePassword(profile.id, pin) })
+  if (updateError) throw updateError
+  const now = new Date().toISOString()
+  const { error: credentialUpdateError } = await admin.from('teacher_credentials').update({
+    pin_initialized: true,
+    activation_phone_hash: null,
+    activation_failed_count: 0,
+    activation_locked_until: null,
+    activated_at: now,
+    pin_changed_at: now,
+    failed_count: 0,
+    locked_until: null,
+    updated_at: now,
+  }).eq('profile_id', profile.id).eq('pin_initialized', false)
+  if (credentialUpdateError) throw credentialUpdateError
+  await admin.from('account_security_events').insert({ profile_id: profile.id, event_type: 'first_pin_setup_succeeded' })
+
+  const authClient = createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  const { data: authData, error: authError } = await authClient.auth.signInWithPassword({ email: credential.auth_email, password: await derivePassword(profile.id, pin) })
+  if (authError || !authData.session) throw new Error('PIN은 설정되었지만 자동 로그인에 실패했습니다. 새 PIN으로 다시 로그인해주세요.')
   const assignment: any = profile.role === 'teacher' ? await activeAssignment(profile.id) : null
   return {
     accessToken: authData.session.access_token,
@@ -452,6 +529,160 @@ async function createUser(req: Request, body: Json, bootstrap = false) {
   return { id: profileId, name, role }
 }
 
+type RosterTeacher = { name: string; role: 'teacher' | 'executive'; phoneLast4: string }
+type RosterCrew = { name: string; teacherName?: string; students: string[] }
+
+async function prepareRosterTeacher(item: RosterTeacher) {
+  const name = cleanName(item.name)
+  if (name.length < 2 || !/^\d{4}$/.test(item.phoneLast4)) throw new Error('교사 명단의 이름 또는 본인 확인 정보가 올바르지 않습니다.')
+  const requestedRole = item.role === 'executive' ? 'executive' : 'teacher'
+  const { data: matches, error: matchError } = await admin.from('profiles').select('*').eq('display_name', name).limit(2)
+  if (matchError) throw matchError
+  if ((matches ?? []).length > 1) throw new Error(`${name} 교사 계정이 중복되어 자동 이관할 수 없습니다.`)
+
+  let profile: any = matches?.[0]
+  if (!profile) {
+    const profileId = crypto.randomUUID()
+    const authEmail = `crew-${profileId}@users.saebyeokiseul.invalid`
+    const { data: authData, error: authError } = await admin.auth.admin.createUser({
+      email: authEmail,
+      password: await derivePassword(profileId, randomToken()),
+      email_confirm: true,
+      user_metadata: { display_name: name },
+    })
+    if (authError || !authData.user) throw authError ?? new Error('교사 인증 계정을 만들지 못했습니다.')
+    const { data: created, error: createError } = await admin.from('profiles').insert({ id: profileId, auth_user_id: authData.user.id, display_name: name, role: requestedRole }).select('*').single()
+    if (createError) { await admin.auth.admin.deleteUser(authData.user.id); throw createError }
+    profile = created
+    const { error: credentialError } = await admin.from('teacher_credentials').insert({
+      profile_id: profileId,
+      auth_email: authEmail,
+      pin_initialized: false,
+      activation_phone_hash: await activationHash(profileId, item.phoneLast4),
+    })
+    if (credentialError) throw credentialError
+    return { profile, created: true }
+  }
+
+  const role = profile.role === 'executive' ? 'executive' : requestedRole
+  if (!profile.active || profile.role !== role) {
+    const { data: updated, error: updateError } = await admin.from('profiles').update({ active: true, role, updated_at: new Date().toISOString() }).eq('id', profile.id).select('*').single()
+    if (updateError) throw updateError
+    profile = updated
+  }
+  const { data: credential } = await admin.from('teacher_credentials').select('*').eq('profile_id', profile.id).maybeSingle()
+  if (!credential) {
+    let authUserId = profile.auth_user_id
+    const authEmail = `crew-${profile.id}@users.saebyeokiseul.invalid`
+    if (!authUserId) {
+      const { data: authData, error: authError } = await admin.auth.admin.createUser({ email: authEmail, password: await derivePassword(profile.id, randomToken()), email_confirm: true, user_metadata: { display_name: name } })
+      if (authError || !authData.user) throw authError ?? new Error('교사 인증 계정을 만들지 못했습니다.')
+      authUserId = authData.user.id
+      await admin.from('profiles').update({ auth_user_id: authUserId }).eq('id', profile.id)
+    }
+    const { error: credentialError } = await admin.from('teacher_credentials').insert({ profile_id: profile.id, auth_email: authEmail, pin_initialized: false, activation_phone_hash: await activationHash(profile.id, item.phoneLast4) })
+    if (credentialError) throw credentialError
+  } else if (credential.pin_initialized === false) {
+    const { error: credentialError } = await admin.from('teacher_credentials').update({ activation_phone_hash: await activationHash(profile.id, item.phoneLast4), activation_failed_count: 0, activation_locked_until: null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+    if (credentialError) throw credentialError
+  }
+  return { profile, created: false }
+}
+
+function rosterNameKey(name: string): string {
+  return name.normalize('NFC').replace(/\s+/g, '').replace(/[A-Za-z]$/, '').toLocaleLowerCase('ko-KR')
+}
+
+async function importRoster(req: Request, body: Json) {
+  const executive = await requireExecutive(req)
+  const sourceKey = String(body.sourceKey ?? '').trim().slice(0, 100)
+  const operatingYear = Number(body.operatingYear)
+  const teachers = Array.isArray(body.teachers) ? body.teachers as unknown as RosterTeacher[] : []
+  const crews = Array.isArray(body.crews) ? body.crews as unknown as RosterCrew[] : []
+  if (!sourceKey || !Number.isInteger(operatingYear) || operatingYear < 2020 || operatingYear > 2100 || !teachers.length || !crews.length) throw new Error('교적부 이관 자료가 올바르지 않습니다.')
+  const { data: previous } = await admin.from('roster_imports').select('result_counts').eq('source_key', sourceKey).maybeSingle()
+  if (previous) return { alreadyImported: true, ...previous.result_counts }
+
+  const teacherMap = new Map<string, any>()
+  let teachersCreated = 0
+  for (const raw of teachers) {
+    const item = { name: cleanName(raw?.name), role: raw?.role === 'executive' ? 'executive' as const : 'teacher' as const, phoneLast4: String(raw?.phoneLast4 ?? '') }
+    const prepared = await prepareRosterTeacher(item)
+    teacherMap.set(item.name, prepared.profile)
+    if (prepared.created) teachersCreated += 1
+  }
+
+  let crewsCreated = 0
+  let membershipsCreated = 0
+  let studentsRenamed = 0
+  let assignmentsChanged = 0
+  const today = kstDate()
+  for (const rawCrew of crews) {
+    const crewName = cleanName(rawCrew?.name)
+    const teacherName = cleanName(rawCrew?.teacherName)
+    const studentNames = Array.isArray(rawCrew?.students) ? rawCrew.students.map(cleanName).filter(Boolean) : []
+    if (!crewName || !studentNames.length) throw new Error('학생이 없는 크루 또는 잘못된 크루명이 포함되어 있습니다.')
+    let { data: crew, error: crewError } = await admin.from('crews').select('*').eq('name', crewName).eq('operating_year', operatingYear).maybeSingle()
+    if (crewError) throw crewError
+    if (!crew) {
+      const created = await admin.from('crews').insert({ name: crewName, operating_year: operatingYear, active: true }).select('*').single()
+      if (created.error) throw created.error
+      crew = created.data
+      crewsCreated += 1
+    } else if (!crew.active) {
+      const updated = await admin.from('crews').update({ active: true, ended_at: null }).eq('id', crew.id).select('*').single()
+      if (updated.error) throw updated.error
+      crew = updated.data
+    }
+
+    if (teacherName) {
+      const teacher = teacherMap.get(teacherName)
+      if (!teacher) throw new Error(`${crewName} 담당교사 ${teacherName} 계정을 찾지 못했습니다.`)
+      const { data: current } = await admin.from('crew_assignments').select('*').eq('crew_id', crew.id).eq('is_primary', true).is('ends_on', null).maybeSingle()
+      if (current?.profile_id !== teacher.id) {
+        if (current) await admin.from('crew_assignments').update({ ends_on: today }).eq('id', current.id)
+        await admin.from('crew_assignments').update({ ends_on: today }).eq('profile_id', teacher.id).eq('is_primary', true).is('ends_on', null)
+        const { error: assignmentError } = await admin.from('crew_assignments').insert({ crew_id: crew.id, profile_id: teacher.id, starts_on: today, is_primary: true })
+        if (assignmentError) throw assignmentError
+        assignmentsChanged += 1
+      }
+    }
+
+    const { data: existingRows, error: existingError } = await admin.from('crew_memberships').select('id,student_id,legacy_member_id,students(id,display_name)').eq('crew_id', crew.id)
+    if (existingError) throw existingError
+    const available = [...(existingRows ?? [])] as any[]
+    for (const [index, studentName] of studentNames.entries()) {
+      const legacyId = `roster:${operatingYear}:${crewName}:${index + 1}`
+      let membership = available.find((item) => item.legacy_member_id === legacyId)
+      if (!membership) membership = available.find((item) => item.students?.display_name === studentName)
+      if (!membership) {
+        const normalizedMatches = available.filter((item) => rosterNameKey(item.students?.display_name ?? '') === rosterNameKey(studentName))
+        if (normalizedMatches.length === 1) membership = normalizedMatches[0]
+      }
+      if (membership) {
+        if (membership.students?.display_name !== studentName) {
+          const { error: renameError } = await admin.from('students').update({ display_name: studentName, updated_at: new Date().toISOString() }).eq('id', membership.student_id)
+          if (renameError) throw renameError
+          studentsRenamed += 1
+        }
+        const { error: membershipError } = await admin.from('crew_memberships').update({ legacy_member_id: legacyId, status: 'active', ended_on: null, sort_order: index, updated_at: new Date().toISOString() }).eq('id', membership.id)
+        if (membershipError) throw membershipError
+        available.splice(available.indexOf(membership), 1)
+      } else {
+        const { data: student, error: studentError } = await admin.from('students').insert({ display_name: studentName }).select('id').single()
+        if (studentError) throw studentError
+        const { error: membershipError } = await admin.from('crew_memberships').insert({ student_id: student.id, crew_id: crew.id, status: 'active', joined_on: today, status_changed_on: today, sort_order: index, legacy_member_id: legacyId })
+        if (membershipError) throw membershipError
+        membershipsCreated += 1
+      }
+    }
+  }
+  const result = { teachersCreated, crewsCreated, membershipsCreated, studentsRenamed, assignmentsChanged }
+  const { error: importError } = await admin.from('roster_imports').insert({ source_key: sourceKey, imported_by: executive.id, result_counts: result })
+  if (importError) throw importError
+  return { alreadyImported: false, ...result }
+}
+
 async function resetPin(req: Request, body: Json) {
   await requireExecutive(req)
   if (!isPin(body.pin)) throw new Error('4~6자리 숫자 PIN을 입력해주세요.')
@@ -459,7 +690,8 @@ async function resetPin(req: Request, body: Json) {
   if (error) throw error
   const { error: authError } = await admin.auth.admin.updateUserById(profile.auth_user_id, { password: await derivePassword(profile.id, body.pin) })
   if (authError) throw authError
-  await admin.from('teacher_credentials').update({ failed_count: 0, locked_until: null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+  await admin.from('teacher_credentials').update({ pin_initialized: true, activation_phone_hash: null, failed_count: 0, locked_until: null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+  await admin.from('account_security_events').insert({ profile_id: profile.id, event_type: 'pin_reset', metadata: { by: 'executive' } })
   return { ok: true }
 }
 
@@ -475,6 +707,7 @@ async function changeOwnPin(req: Request, body: Json) {
   const { error: updateError } = await admin.auth.admin.updateUserById(profile.auth_user_id, { password: await derivePassword(profile.id, body.newPin) })
   if (updateError) throw updateError
   await admin.from('teacher_credentials').update({ failed_count: 0, locked_until: null, pin_changed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+  await admin.from('account_security_events').insert({ profile_id: profile.id, event_type: 'pin_changed' })
   return { ok: true }
 }
 
@@ -780,6 +1013,7 @@ async function handleRequest(req: Request) {
     const handlers: Record<string, () => Promise<unknown>> = {
       'list-login-teachers': () => loginCards(),
       'teacher-login': () => teacherLogin(body.teacherId, body.pin),
+      'teacher-first-setup': () => teacherFirstSetup(body.teacherId, body.phoneLast4, body.pin),
       'get-profile': () => getProfile(req),
       'teacher-change-pin': () => changeOwnPin(req, body),
       'push-config': () => pushConfig(req),
@@ -803,6 +1037,7 @@ async function handleRequest(req: Request) {
       'admin-create-announcement': () => createAnnouncement(req, body),
       'admin-create-custom-field': () => createCustomField(req, body),
       'admin-create-user': () => createUser(req, body),
+      'admin-import-roster': () => importRoster(req, body),
       'admin-reset-pin': () => resetPin(req, body),
       'admin-manage-crew': () => manageCrew(req, body),
       'admin-manage-student': () => manageStudent(req, body),

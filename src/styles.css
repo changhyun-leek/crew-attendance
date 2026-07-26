@@ -73,6 +73,7 @@ h1, h2, h3, p { margin-top: 0; }
 .teacher-card:hover { border-color: #aa86df; background: #fcfaff; box-shadow: 0 6px 18px rgba(51, 35, 73, .08); }
 .teacher-card strong, .teacher-card small { display: block; }
 .teacher-card strong { font-size: 16px; }
+.first-use-badge { display: inline-block; margin-left: 6px; padding: 3px 7px; border-radius: 999px; color: #6b3fa0; background: #efe5ff; font-size: 12px; font-style: normal; vertical-align: 2px; }
 .teacher-card small { margin-top: 3px; color: var(--muted); }
 .avatar { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 15px; background: var(--primary-soft); color: var(--primary); font-weight: 800; }
 .avatar.large { width: 58px; height: 58px; border-radius: 18px; font-size: 21px; }
@@ -103,6 +104,14 @@ h1, h2, h3, p { margin-top: 0; }
 .keypad .keypad-confirm { display: grid; place-items: center; border-color: var(--primary); background: var(--primary); color: white; }
 .assistant-link { width: 100%; min-height: 44px; margin-top: 14px; border: 0; color: #5c5368; background: transparent; text-decoration: underline; text-underline-offset: 4px; }
 .inline-error { margin: 12px 0 0; color: var(--red); font-size: 14px; font-weight: 700; text-align: center; }
+.first-setup-sheet { max-height: min(92vh, 760px); overflow-y: auto; }
+.first-setup-guide { margin: 22px 0 16px; padding: 15px; border-radius: 14px; color: #3f3152; background: #f4eefb; line-height: 1.55; }
+.first-setup-guide strong, .first-setup-guide p, .first-setup-guide small { display: block; }
+.first-setup-guide p { margin: 5px 0 0; }
+.first-setup-guide small { margin-top: 7px; color: #6b3fa0; font-weight: 700; }
+.first-setup-form { display: grid; gap: 13px; }
+.first-setup-form label { color: #43384f; font-size: 14px; font-weight: 700; }
+.first-setup-form input { min-height: 52px; font-size: 19px; letter-spacing: .08em; }
 .assistant-sheet h2 { margin-bottom: 8px; font-size: 24px; }
 .assistant-sheet > p:not(.eyebrow, .privacy-note) { color: var(--muted); line-height: 1.6; }
 .recent-names { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 18px 0; }
@@ -441,6 +450,10 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 [data-theme='dark'] .role-entry-grid > button:hover,
 [data-theme='dark'] .teacher-card:hover,
 [data-theme='dark'] .theme-trigger:hover { border-color: #9b7ac2; background: #281d34; }
+[data-theme='dark'] .first-use-badge { color: #e5d4ff; background: #4a2b69; }
+[data-theme='dark'] .first-setup-guide { color: #eee6f5; background: #2c2038; }
+[data-theme='dark'] .first-setup-guide small { color: #d8b4fe; }
+[data-theme='dark'] .first-setup-form label { color: #eee7f3; }
 [data-theme='dark'] .empty-result,
 [data-theme='dark'] .keypad button,
 [data-theme='dark'] .count.unchecked,

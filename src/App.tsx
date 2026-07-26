@@ -25,7 +25,8 @@ import {
 } from 'lucide-react'
 import { api, isDemoMode } from './lib/api'
 import { thisWeekSunday } from './lib/date'
-import { buildReportText, downloadText, rowsToCsv, rowsToTsv } from './lib/export'
+import { buildReportText, downloadText, rowsToCsv } from './lib/export'
+import { downloadRegistryWorkbook } from './lib/registryXlsx'
 import { PwaInstallControl, PwaUpdateNotice } from './PwaInstall'
 import { ThemeControl } from './Theme'
 import { AttendanceReminderPanel, TeacherNotificationControl } from './PushNotifications'
@@ -157,7 +158,7 @@ function LoginPage({ onLogin, onAssistant }: {
         <div className="teacher-grid">
           {filtered.map((card) => <button className="teacher-card" key={card.teacherId} onClick={() => entry === 'assistant' ? setAssistantCard(card) : setSelected(card)}>
             <span className="avatar" aria-hidden="true">{card.teacherName.slice(0, 1)}</span>
-            <span><strong>{card.teacherName} 선생님</strong><small>{card.crewName}</small></span>
+            <span><strong>{card.teacherName} 선생님 {card.needsSetup && <em className="first-use-badge">처음 사용</em>}</strong><small>{card.crewName}</small></span>
             <span className="card-arrow" aria-hidden="true">›</span>
           </button>)}
           {!loading && !filtered.length && <p className="empty-result">검색 결과가 없습니다. 이름을 다시 확인해주세요.</p>}
@@ -166,13 +167,52 @@ function LoginPage({ onLogin, onAssistant }: {
     </section>
 
     <footer className="login-footer">학생 출석 정보는 승인된 교사와 임원만 관리합니다.</footer>
-    {selected && <PinModal card={selected} onClose={() => setSelected(null)} onAssistant={() => {
+    {selected && (selected.needsSetup ? <FirstPinSetupModal card={selected} onClose={() => setSelected(null)} onSuccess={onLogin} /> : <PinModal card={selected} onClose={() => setSelected(null)} onAssistant={() => {
       if (selected.role === 'executive') return
       setAssistantCard(selected)
       setSelected(null)
-    }} onSuccess={onLogin} />}
+    }} onSuccess={onLogin} />)}
     {assistantCard && <AssistantModal card={assistantCard} onClose={() => setAssistantCard(null)} onSuccess={onAssistant} />}
   </main>
+}
+
+function FirstPinSetupModal({ card, onClose, onSuccess }: {
+  card: CrewLoginCard
+  onClose: () => void
+  onSuccess: (profile: AuthenticatedProfile) => void
+}) {
+  const [phoneLast4, setPhoneLast4] = useState('')
+  const [pin, setPin] = useState('')
+  const [confirmPin, setConfirmPin] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!/^\d{4}$/.test(phoneLast4)) return setError('본인 휴대폰 번호의 마지막 4자리를 입력해주세요.')
+    if (!/^\d{4,6}$/.test(pin)) return setError('새 PIN은 숫자 4~6자리로 정해주세요.')
+    if (pin !== confirmPin) return setError('새 PIN 두 개가 서로 다릅니다.')
+    setBusy(true); setError('')
+    try { onSuccess(await api.teacherFirstSetup(card.teacherId, phoneLast4, pin)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '처음 사용 설정에 실패했습니다.') }
+    finally { setBusy(false) }
+  }
+
+  return <div className="modal-backdrop" role="presentation">
+    <section className="pin-sheet first-setup-sheet" role="dialog" aria-modal="true" aria-labelledby="first-pin-title">
+      <button className="icon-button close-button" onClick={onClose} aria-label="닫기"><X /></button>
+      <div className="pin-header"><span className="avatar large">{card.teacherName.slice(0, 1)}</span><div><h2 id="first-pin-title">처음 사용 설정</h2><p>{card.teacherName} 선생님 · {card.crewName}</p></div></div>
+      <div className="first-setup-guide"><strong>처음 한 번만 확인합니다</strong><p>교적부에 등록된 본인 휴대폰 번호 끝 4자리를 입력한 뒤, 앞으로 사용할 PIN을 직접 정해주세요.</p>{isDemoMode && <small>미리보기 본인 확인 번호: 0000</small>}</div>
+      <form className="first-setup-form" onSubmit={submit}>
+        <label>휴대폰 번호 끝 4자리<input autoFocus inputMode="numeric" autoComplete="off" value={phoneLast4} onChange={(event) => setPhoneLast4(event.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="예: 1234" maxLength={4} /></label>
+        <label>새 로그인 PIN (숫자 4~6자리)<input type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="새 PIN" maxLength={6} /></label>
+        <label>새 PIN 한 번 더<input type="password" inputMode="numeric" autoComplete="new-password" value={confirmPin} onChange={(event) => setConfirmPin(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="새 PIN 확인" maxLength={6} /></label>
+        {error && <p className="inline-error" role="alert">{error}</p>}
+        <button className="primary-button" disabled={busy}>{busy ? '설정 중…' : '내 PIN 설정하고 시작'}</button>
+      </form>
+      <p className="privacy-note"><ShieldCheck size={16} /> 휴대폰 번호 원문은 저장하지 않으며 본인 확인에만 사용합니다.</p>
+    </section>
+  </div>
 }
 
 function PinModal({ card, onClose, onAssistant, onSuccess }: {
@@ -461,8 +501,11 @@ function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfi
   }
   useEffect(() => { void load() }, [])
 
-  async function copyTable() { await navigator.clipboard.writeText(rowsToTsv(rows)); setNotice('Excel용 표를 복사했습니다.') }
   function csv() { downloadText(`새벽이슬_출석_${filters.from}_${filters.to}.csv`, rowsToCsv(rows), 'text/csv;charset=utf-8') }
+  function xlsx() {
+    downloadRegistryWorkbook(`새벽이슬_교적부형식_출석_${filters.from}_${filters.to}.xlsx`, rows)
+    setNotice('기존 교적부 형식의 Excel 파일을 만들었습니다. 개인정보 열은 빈칸으로 유지됩니다.')
+  }
   function txt() {
     const grouped = rows.reduce<Record<string, AttendanceExportRow[]>>((groups, row) => {
       const key = `${row.attendanceDate}|${row.crewName}`
@@ -489,7 +532,7 @@ function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfi
       <div className="nav-user"><span>{profile.name}</span><small>임원 관리자</small><ThemeControl variant="nav" /><button onClick={onLogout}><LogOut />로그아웃</button></div>
     </aside>
     <main className="dashboard-main">
-      <header className="dashboard-header"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="메뉴"><Menu /></button><div><p className="eyebrow">임원 전용</p><h1>{nav.find(([id]) => id === tab)?.[1]}</h1></div><div className="export-buttons"><button onClick={txt}><Download />TXT</button><button onClick={csv}><Download />CSV</button><button onClick={copyTable}><Clipboard />Excel용 표 복사</button></div></header>
+      <header className="dashboard-header"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="메뉴"><Menu /></button><div><p className="eyebrow">임원 전용</p><h1>{nav.find(([id]) => id === tab)?.[1]}</h1></div><div className="export-buttons"><button onClick={txt}><Download />TXT</button><button onClick={csv}><Download />CSV</button><button onClick={xlsx}><Download />교적부 XLSX</button></div></header>
       {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="닫기"><X /></button></div>}
       {(tab === 'overview' || tab === 'records') && <>
         {tab === 'overview' && <AttendanceReminderPanel date={thisWeekSunday()} />}

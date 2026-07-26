@@ -14,3 +14,5 @@ vitest.config.js
 vitest.config.d.ts
 docs/rendered/
 supabase/.temp/
+__pycache__/
+*.py[cod]
