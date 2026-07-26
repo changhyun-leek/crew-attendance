@@ -34,6 +34,9 @@ describe('설치형 웹앱 설정', () => {
     expect(worker).toContain("request.mode === 'navigate'")
     expect(worker).toContain("'script', 'style', 'image', 'font', 'manifest'")
     expect(worker).not.toContain('supabase.co')
+    expect(worker).toContain("addEventListener('push'")
+    expect(worker).toContain('showNotification')
+    expect(worker).toContain("addEventListener('notificationclick'")
   })
 
   it('확정된 휴대폰용과 컴퓨터용 아이콘 파일을 함께 제공한다', () => {

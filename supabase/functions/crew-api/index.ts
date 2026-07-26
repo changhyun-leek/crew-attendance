@@ -1,10 +1,14 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.57.4'
+import webpush from 'npm:web-push@3.6.7'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const PUBLISHABLE_KEY = Deno.env.get('SUPABASE_PUBLISHABLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY')!
 const SECRET_KEY = Deno.env.get('SUPABASE_SECRET_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const PIN_PEPPER = Deno.env.get('PIN_PEPPER') ?? ''
 const BOOTSTRAP_ADMIN_CODE = Deno.env.get('BOOTSTRAP_ADMIN_CODE') ?? ''
+const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') ?? ''
+const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') ?? ''
+const VAPID_SUBJECT = Deno.env.get('VAPID_SUBJECT') ?? 'mailto:admin@saebyeokiseul.invalid'
 const ALLOWED_ORIGINS = new Set([
   'https://changhyun-leek.github.io',
   'http://localhost:5173',
@@ -34,6 +38,9 @@ function reply(req: Request, data: unknown, status = 200) {
 function fail(req: Request, message: string, status = 400) { return reply(req, { error: message }, status) }
 
 function isPin(pin: unknown): pin is string { return typeof pin === 'string' && /^\d{4,6}$/.test(pin) }
+function firstRelation<T>(value: T | T[] | null | undefined): T | undefined {
+  return Array.isArray(value) ? value[0] : value ?? undefined
+}
 function cleanName(name: unknown): string {
   if (typeof name !== 'string') return ''
   return name.trim().replace(/\s+/g, ' ').slice(0, 30)
@@ -59,6 +66,14 @@ function randomToken(): string {
 
 function kstDate(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+}
+
+function kstThisWeekSunday(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  const date = new Date(Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day), 12))
+  date.setUTCDate(date.getUTCDate() + ((7 - date.getUTCDay()) % 7))
+  return date.toISOString().slice(0, 10)
 }
 
 async function currentProfile(req: Request): Promise<Profile> {
@@ -245,7 +260,7 @@ async function assistantStart(body: Json) {
   if (name.length < 2) throw new Error('보조교사 이름을 입력해주세요.')
   const { data: crew, error: crewError } = await admin.from('crews').select('id').eq('id', crewId).eq('active', true).single()
   if (crewError || !crew) throw new Error('사용할 수 없는 크루입니다.')
-  const date = kstDate()
+  const date = kstThisWeekSunday()
   const { data: sessionId, error } = await admin.rpc('ensure_attendance_session', { target_crew: crewId, target_date: date })
   if (error) throw error
   const token = randomToken()
@@ -448,6 +463,162 @@ async function resetPin(req: Request, body: Json) {
   return { ok: true }
 }
 
+async function changeOwnPin(req: Request, body: Json) {
+  const profile = await currentProfile(req)
+  if (!isPin(body.currentPin) || !isPin(body.newPin)) throw new Error('현재 PIN과 새 4~6자리 PIN을 확인해주세요.')
+  if (body.currentPin === body.newPin) throw new Error('새 PIN은 현재 PIN과 다르게 정해주세요.')
+  const { data: credential, error: credentialError } = await admin.from('teacher_credentials').select('auth_email').eq('profile_id', profile.id).single()
+  if (credentialError || !credential) throw new Error('로그인 설정을 찾을 수 없습니다.')
+  const authClient = createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  const { error: verifyError } = await authClient.auth.signInWithPassword({ email: credential.auth_email, password: await derivePassword(profile.id, body.currentPin) })
+  if (verifyError) throw new Error('현재 PIN이 올바르지 않습니다.')
+  const { error: updateError } = await admin.auth.admin.updateUserById(profile.auth_user_id, { password: await derivePassword(profile.id, body.newPin) })
+  if (updateError) throw updateError
+  await admin.from('teacher_credentials').update({ failed_count: 0, locked_until: null, pin_changed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+  return { ok: true }
+}
+
+function requirePushConfiguration() {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) throw new Error('휴대폰 알림 서버 설정이 아직 완료되지 않았습니다.')
+}
+
+async function pushConfig(req: Request) {
+  const profile = await currentProfile(req)
+  const { count } = await admin.from('push_subscriptions').select('*', { count: 'exact', head: true }).eq('profile_id', profile.id).eq('active', true)
+  return { publicKey: VAPID_PUBLIC_KEY, subscribed: Boolean(count) }
+}
+
+async function subscribePush(req: Request, body: Json) {
+  requirePushConfiguration()
+  const profile = await currentProfile(req)
+  const endpoint = String(body.endpoint ?? '')
+  const p256dh = String(body.p256dh ?? '')
+  const auth = String(body.auth ?? '')
+  if (!endpoint.startsWith('https://') || !p256dh || !auth) throw new Error('휴대폰 알림 정보를 확인하지 못했습니다.')
+  const { error } = await admin.from('push_subscriptions').upsert({
+    profile_id: profile.id,
+    endpoint: endpoint.slice(0, 2000),
+    p256dh: p256dh.slice(0, 500),
+    auth: auth.slice(0, 500),
+    user_agent: String(body.userAgent ?? '').slice(0, 500),
+    active: true,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'endpoint' })
+  if (error) throw error
+  return { ok: true }
+}
+
+async function unsubscribePush(req: Request, body: Json) {
+  const profile = await currentProfile(req)
+  const endpoint = String(body.endpoint ?? '')
+  if (endpoint) await admin.from('push_subscriptions').update({ active: false, updated_at: new Date().toISOString() }).eq('profile_id', profile.id).eq('endpoint', endpoint)
+  return { ok: true }
+}
+
+async function reminderStatus(req: Request, body: Json) {
+  await requireExecutive(req)
+  const attendanceDate = validDate(body.date) ? body.date : kstThisWeekSunday()
+  const [crewsResult, assignmentsResult, sessionsResult, membershipsResult, remindersResult] = await Promise.all([
+    admin.from('crews').select('id,name').eq('active', true).order('name'),
+    admin.from('crew_assignments').select('crew_id,profile_id,profiles(display_name)').is('ends_on', null),
+    admin.from('attendance_sessions').select('id,crew_id').eq('attendance_date', attendanceDate),
+    admin.from('crew_memberships').select('crew_id').eq('status', 'active'),
+    admin.from('attendance_reminders').select('crew_id,created_at').eq('attendance_date', attendanceDate).order('created_at', { ascending: false }),
+  ])
+  const firstError = crewsResult.error ?? assignmentsResult.error ?? sessionsResult.error ?? membershipsResult.error ?? remindersResult.error
+  if (firstError) throw firstError
+  const sessions = sessionsResult.data ?? []
+  const sessionIds = sessions.map((session: any) => session.id)
+  const { data: records, error: recordsError } = sessionIds.length
+    ? await admin.from('attendance_records').select('session_id,status').in('session_id', sessionIds)
+    : { data: [], error: null }
+  if (recordsError) throw recordsError
+  const assignments = new Map((assignmentsResult.data ?? []).map((item: any) => [item.crew_id, item]))
+  const sessionByCrew = new Map(sessions.map((item: any) => [item.crew_id, item.id]))
+  const activeCounts = new Map<string, number>()
+  for (const membership of membershipsResult.data ?? []) activeCounts.set(membership.crew_id, (activeCounts.get(membership.crew_id) ?? 0) + 1)
+  const profileIds = (assignmentsResult.data ?? []).map((item: any) => item.profile_id)
+  const { data: subscriptions, error: subscriptionError } = profileIds.length
+    ? await admin.from('push_subscriptions').select('profile_id').in('profile_id', profileIds).eq('active', true)
+    : { data: [], error: null }
+  if (subscriptionError) throw subscriptionError
+  const deviceCounts = new Map<string, number>()
+  for (const subscription of subscriptions ?? []) deviceCounts.set(subscription.profile_id, (deviceCounts.get(subscription.profile_id) ?? 0) + 1)
+  const lastReminders = new Map<string, string>()
+  for (const reminder of remindersResult.data ?? []) if (!lastReminders.has(reminder.crew_id)) lastReminders.set(reminder.crew_id, reminder.created_at)
+  return (crewsResult.data ?? []).map((crew: any) => {
+    const assignment: any = assignments.get(crew.id)
+    const teacher = firstRelation<{ display_name: string }>(assignment?.profiles)
+    const sessionId = sessionByCrew.get(crew.id)
+    const crewRecords = sessionId ? (records ?? []).filter((record: any) => record.session_id === sessionId) : []
+    const total = crewRecords.length || activeCounts.get(crew.id) || 0
+    const checked = crewRecords.filter((record: any) => record.status !== 'unchecked').length
+    return {
+      crewId: crew.id,
+      crewName: crew.name,
+      teacherId: assignment?.profile_id,
+      teacherName: teacher?.display_name,
+      attendanceDate,
+      checked,
+      total,
+      status: total > 0 && checked >= total ? 'completed' : checked > 0 ? 'in_progress' : 'not_started',
+      notificationDevices: assignment ? deviceCounts.get(assignment.profile_id) ?? 0 : 0,
+      lastReminderAt: lastReminders.get(crew.id),
+    }
+  })
+}
+
+async function sendAttendanceReminder(req: Request, body: Json) {
+  const executive = await requireExecutive(req)
+  requirePushConfiguration()
+  const crewId = String(body.crewId ?? '')
+  const attendanceDate = validDate(body.date) ? body.date : kstThisWeekSunday()
+  const { data: assignment, error: assignmentError } = await admin.from('crew_assignments').select('profile_id,profiles(display_name),crews(name)').eq('crew_id', crewId).is('ends_on', null).single()
+  if (assignmentError || !assignment) throw new Error('담당교사가 배정된 크루인지 확인해주세요.')
+  const statuses = await reminderStatus(req, { date: attendanceDate }) as any[]
+  const target = statuses.find((item) => item.crewId === crewId)
+  if (target?.status === 'completed') throw new Error('이미 출석체크를 완료한 크루입니다.')
+  const cutoff = new Date(Date.now() - 30 * 60_000).toISOString()
+  const { count: recentCount } = await admin.from('attendance_reminders').select('*', { count: 'exact', head: true }).eq('crew_id', crewId).eq('attendance_date', attendanceDate).gte('created_at', cutoff)
+  if (recentCount) throw new Error('같은 크루에는 30분에 한 번만 독려 알림을 보낼 수 있습니다.')
+  const { data: subscriptions, error: subscriptionError } = await admin.from('push_subscriptions').select('id,endpoint,p256dh,auth').eq('profile_id', assignment.profile_id).eq('active', true)
+  if (subscriptionError) throw subscriptionError
+  if (!subscriptions?.length) return { sent: 0, failed: 0, message: '담당교사가 아직 휴대폰 알림을 켜지 않았습니다.' }
+
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+  const teacherName = firstRelation<{ display_name: string }>(assignment.profiles)?.display_name ?? '담당교사'
+  const crewName = firstRelation<{ name: string }>(assignment.crews)?.name ?? '담당 크루'
+  const bodyText = `${teacherName} 선생님, ${crewName}의 ${attendanceDate} 출석체크를 부탁드립니다.`
+  const navigate = 'https://changhyun-leek.github.io/crew-attendance/?role=teacher'
+  const payload = JSON.stringify({
+    web_push: 8030,
+    notification: {
+      title: '새벽이슬 출석체크 알림',
+      body: bodyText,
+      navigate,
+      icon: 'https://changhyun-leek.github.io/crew-attendance/pwa-192x192.png',
+      badge: 'https://changhyun-leek.github.io/crew-attendance/pwa-64x64.png',
+      tag: `attendance-${crewId}-${attendanceDate}`,
+      app_badge: '1',
+    },
+  })
+  let sent = 0
+  let failed = 0
+  await Promise.all(subscriptions.map(async (subscription: any) => {
+    try {
+      await webpush.sendNotification({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }, payload, { TTL: 60 * 60 * 12, urgency: 'high' })
+      sent += 1
+      await admin.from('push_subscriptions').update({ last_success_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', subscription.id)
+    } catch (error: any) {
+      failed += 1
+      if ([404, 410].includes(Number(error?.statusCode))) await admin.from('push_subscriptions').update({ active: false, updated_at: new Date().toISOString() }).eq('id', subscription.id)
+      console.error('push send failed', error?.statusCode ?? error)
+    }
+  }))
+  await admin.from('attendance_reminders').insert({ crew_id: crewId, attendance_date: attendanceDate, target_profile_id: assignment.profile_id, sent_by: executive.id, message: bodyText, sent_count: sent, failed_count: failed })
+  return { sent, failed, message: sent ? `${teacherName} 선생님의 휴대폰 ${sent}대에 알림을 보냈습니다.` : '알림을 보내지 못했습니다. 교사의 알림 설정을 확인해주세요.' }
+}
+
 async function manageCrew(req: Request, body: Json) {
   await requireExecutive(req)
   if (body.operation === 'create') {
@@ -610,6 +781,10 @@ async function handleRequest(req: Request) {
       'list-login-teachers': () => loginCards(),
       'teacher-login': () => teacherLogin(body.teacherId, body.pin),
       'get-profile': () => getProfile(req),
+      'teacher-change-pin': () => changeOwnPin(req, body),
+      'push-config': () => pushConfig(req),
+      'push-subscribe': () => subscribePush(req, body),
+      'push-unsubscribe': () => unsubscribePush(req, body),
       'get-attendance': () => getAttendance(req, body),
       'mark-attendance': () => markAttendance(req, body),
       'assistant-start': () => assistantStart(body),
@@ -621,6 +796,8 @@ async function handleRequest(req: Request) {
       'set-membership-status': () => setMembershipStatus(req, body),
       'dashboard': () => dashboard(req, body),
       'admin-workspace': () => adminWorkspace(req),
+      'admin-reminder-status': () => reminderStatus(req, body),
+      'admin-send-attendance-reminder': () => sendAttendanceReminder(req, body),
       'submit-feedback': () => submitFeedback(req, body),
       'admin-update-feedback': () => updateFeedback(req, body),
       'admin-create-announcement': () => createAnnouncement(req, body),

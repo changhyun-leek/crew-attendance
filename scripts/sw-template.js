@@ -24,6 +24,29 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting()
 })
 
+self.addEventListener('push', (event) => {
+  const raw = event.data?.json?.() ?? {}
+  const notification = raw.notification ?? raw
+  const title = notification.title || '새벽이슬 출석체크 알림'
+  event.waitUntil(self.registration.showNotification(title, {
+    body: notification.body || '이번 주 출석체크를 부탁드립니다.',
+    icon: notification.icon || new URL('pwa-192x192.png', SCOPE_URL).href,
+    badge: notification.badge || new URL('pwa-64x64.png', SCOPE_URL).href,
+    tag: notification.tag || 'attendance-reminder',
+    renotify: true,
+    data: { url: notification.navigate || SCOPE_URL },
+  }))
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const destination = event.notification.data?.url || SCOPE_URL
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+    const existing = windows.find((client) => client.url.startsWith(SCOPE_URL))
+    return existing ? existing.focus().then(() => existing.navigate(destination)) : clients.openWindow(destination)
+  }))
+})
+
 self.addEventListener('fetch', (event) => {
   const request = event.request
   if (request.method !== 'GET') return

@@ -141,3 +141,27 @@ export interface DashboardSummary {
   unchecked: number
   attendanceRate: number
 }
+
+export interface AttendanceReminderCrew {
+  crewId: string
+  crewName: string
+  teacherId?: string
+  teacherName?: string
+  attendanceDate: string
+  checked: number
+  total: number
+  status: 'not_started' | 'in_progress' | 'completed'
+  notificationDevices: number
+  lastReminderAt?: string
+}
+
+export interface PushConfig {
+  publicKey: string
+  subscribed: boolean
+}
+
+export interface ReminderSendResult {
+  sent: number
+  failed: number
+  message: string
+}

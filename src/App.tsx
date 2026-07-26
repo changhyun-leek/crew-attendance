@@ -9,6 +9,7 @@ import {
   History,
   LayoutDashboard,
   ListPlus,
+  LockKeyhole,
   LogOut,
   Megaphone,
   Menu,
@@ -23,10 +24,11 @@ import {
   X,
 } from 'lucide-react'
 import { api, isDemoMode } from './lib/api'
-import { lastSunday } from './lib/date'
+import { thisWeekSunday } from './lib/date'
 import { buildReportText, downloadText, rowsToCsv, rowsToTsv } from './lib/export'
 import { PwaInstallControl, PwaUpdateNotice } from './PwaInstall'
 import { ThemeControl } from './Theme'
+import { AttendanceReminderPanel, TeacherNotificationControl } from './PushNotifications'
 import type {
   AttendanceExportRow,
   AttendanceMember,
@@ -257,7 +259,7 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
   online: boolean
   onLogout: () => void
 }) {
-  const [date, setDate] = useState(initialSnapshot?.attendanceDate ?? lastSunday())
+  const [date, setDate] = useState(initialSnapshot?.attendanceDate ?? thisWeekSunday())
   const [data, setData] = useState<AttendanceSnapshot | null>(initialSnapshot)
   const [loading, setLoading] = useState(!initialSnapshot)
   const [error, setError] = useState('')
@@ -268,6 +270,7 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
   const [nameEditOpen, setNameEditOpen] = useState(false)
   const [assistantName, setAssistantName] = useState(initialSnapshot?.actor.name ?? '')
   const [detailMember, setDetailMember] = useState<AttendanceMember | null>(null)
+  const [pinChangeOpen, setPinChangeOpen] = useState(false)
 
   const crewId = initialSnapshot?.crewId ?? profile?.crewId ?? ''
   const load = async () => {
@@ -345,7 +348,7 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
       <button className="icon-button" onClick={onLogout} aria-label="나가기"><LogOut /></button>
     </header>
     <section className="attendance-sticky">
-      <label htmlFor="attendance-date">출석 날짜</label>
+      <label htmlFor="attendance-date">출석 날짜 <small>이번 주 주일로 자동 설정</small></label>
       <input id="attendance-date" type="date" value={date} disabled={assistantMode} onChange={(event) => setDate(event.target.value)} />
       <div className="count-grid">
         <div className="count present"><span>출석</span><strong>{counts.present}</strong></div>
@@ -370,7 +373,9 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
         {!!counts.unchecked && <button className="outline-danger" onClick={markUncheckedAbsent}>미체크 {counts.unchecked}명 모두 결석 처리</button>}
         <button className="primary-button" onClick={copyReport}><Clipboard /> 보고 문구 복사</button>
         {!assistantMode && <button className="secondary-button" onClick={() => setManageOpen(!manageOpen)}><Settings /> 학생 관리</button>}
+        {!assistantMode && <button className="secondary-button" onClick={() => setPinChangeOpen(true)}><LockKeyhole /> 내 PIN 변경</button>}
       </section>
+      {!assistantMode && <TeacherNotificationControl />}
       {manageOpen && !assistantMode && <section className="management-card">
         <h2>학생 관리</h2>
         <form className="inline-form" onSubmit={addStudent}><label htmlFor="new-student">새 학생 이름</label><div><input id="new-student" value={newStudent} onChange={(event) => setNewStudent(event.target.value)} /><button>추가</button></div></form>
@@ -378,6 +383,7 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
       </section>}
     </>}
     {nameEditOpen && <div className="modal-backdrop"><form className="small-dialog" onSubmit={correctAssistantName}><button type="button" className="icon-button close-button" onClick={() => setNameEditOpen(false)} aria-label="닫기"><X /></button><h2>보조교사 이름 수정</h2><p>현재 세션의 표시 이름이 바뀌며 이전 이름도 변경 이력에 남습니다.</p><label htmlFor="corrected-name">보조교사 이름</label><input id="corrected-name" value={assistantName} onChange={(event) => setAssistantName(event.target.value)} /><button className="primary-button">이름 수정</button></form></div>}
+    {pinChangeOpen && <PinChangeDialog onClose={() => setPinChangeOpen(false)} />}
     {detailMember && data && <StudentDetailsDialog member={detailMember} fields={data.customFields} assistantMode={assistantMode} onClose={() => setDetailMember(null)} onSave={async (details) => {
       const updated = await api.updateAttendanceDetails(data.sessionId, detailMember.membershipId, details, assistantMode)
       setData(updated); setDetailMember(null)
@@ -393,6 +399,26 @@ function AttendanceRow({ member, state, disabled, onMark, onDetails }: { member:
       <button disabled={disabled} className={member.attendanceStatus === 'absent' ? 'selected-absent' : ''} onClick={() => onMark(member, 'absent')}><X />결석</button>
     </div>
   </article>
+}
+
+function PinChangeDialog({ onClose }: { onClose: () => void }) {
+  const [currentPin, setCurrentPin] = useState('')
+  const [newPin, setNewPin] = useState('')
+  const [confirmPin, setConfirmPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
+  const pinInput = (value: string) => value.replace(/\D/g, '').slice(0, 6)
+  async function submit(event: FormEvent) {
+    event.preventDefault(); setError('')
+    if (newPin !== confirmPin) return setError('새 PIN 두 번이 서로 다릅니다.')
+    if (newPin.length < 4) return setError('새 PIN을 숫자 4~6자리로 입력해주세요.')
+    setBusy(true)
+    try { await api.changePin(currentPin, newPin); setDone(true) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'PIN을 변경하지 못했습니다.') }
+    finally { setBusy(false) }
+  }
+  return <div className="modal-backdrop"><form className="small-dialog pin-change-dialog" onSubmit={submit}><button type="button" className="icon-button close-button" onClick={onClose} aria-label="PIN 변경 닫기"><X /></button>{done ? <><Check className="sent-icon" /><h2>PIN을 변경했습니다</h2><p>다음 로그인부터 새 PIN을 사용해주세요. 현재 로그인은 그대로 유지됩니다.</p><button type="button" className="primary-button" onClick={onClose}>확인</button></> : <><p className="eyebrow">내 로그인 관리</p><h2>내 PIN 변경</h2><p>본인 확인을 위해 현재 PIN을 먼저 입력합니다. 숫자 6자리를 권장합니다.</p><label>현재 PIN<input autoFocus required type="password" inputMode="numeric" autoComplete="current-password" pattern="[0-9]{4,6}" value={currentPin} onChange={(event) => setCurrentPin(pinInput(event.target.value))} /></label><label>새 PIN<input required type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4,6}" value={newPin} onChange={(event) => setNewPin(pinInput(event.target.value))} /></label><label>새 PIN 한 번 더<input required type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4,6}" value={confirmPin} onChange={(event) => setConfirmPin(pinInput(event.target.value))} /></label>{error && <p className="inline-error" role="alert">{error}</p>}<button className="primary-button" disabled={busy}>{busy ? '변경 중…' : 'PIN 변경하기'}</button></>}</form></div>
 }
 
 function StudentDetailsDialog({ member, fields, assistantMode, onClose, onSave }: { member: AttendanceMember; fields: AttendanceSnapshot['customFields']; assistantMode: boolean; onClose: () => void; onSave: (details: { absenceReason: string; contactStatus: ContactStatus; specialNote?: string; customResponses: Record<string, string> }) => Promise<void> }) {
@@ -422,7 +448,7 @@ type AdminTab = 'overview' | 'records' | 'notices' | 'feedback' | 'crews' | 'tea
 function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfile; onLogout: () => void }) {
   const [tab, setTab] = useState<AdminTab>('overview')
   const [mobileNav, setMobileNav] = useState(false)
-  const [filters, setFilters] = useState({ from: lastSunday(), to: lastSunday(), crew: '', student: '', status: '', actor: '', notes: '' })
+  const [filters, setFilters] = useState({ from: thisWeekSunday(), to: thisWeekSunday(), crew: '', student: '', status: '', actor: '', notes: '' })
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [rows, setRows] = useState<AttendanceExportRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -466,6 +492,7 @@ function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfi
       <header className="dashboard-header"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="메뉴"><Menu /></button><div><p className="eyebrow">임원 전용</p><h1>{nav.find(([id]) => id === tab)?.[1]}</h1></div><div className="export-buttons"><button onClick={txt}><Download />TXT</button><button onClick={csv}><Download />CSV</button><button onClick={copyTable}><Clipboard />Excel용 표 복사</button></div></header>
       {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="닫기"><X /></button></div>}
       {(tab === 'overview' || tab === 'records') && <>
+        {tab === 'overview' && <AttendanceReminderPanel date={thisWeekSunday()} />}
         <section className="filter-bar">
           <label>시작일<input type="date" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} /></label>
           <label>종료일<input type="date" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} /></label>
@@ -566,8 +593,23 @@ function AdminManagement({ tab, onDone }: { tab: 'crews' | 'teachers' | 'student
   </section>
 }
 
+function AttendanceDataTable({ rows, showCrew }: { rows: AttendanceExportRow[]; showCrew: boolean }) {
+  return <div className="table-scroll"><table><thead><tr><th>출석일</th>{showCrew && <th>크루</th>}<th>학생명</th><th>학생상태</th><th>출석상태</th><th>결석 사유·연락</th><th>학생 비고</th><th>체크자</th><th>최종수정</th></tr></thead><tbody>{rows.map((row, index) => <tr className={row.hasImportantNote ? 'important-row' : ''} key={`${row.attendanceDate}-${row.crewName}-${row.studentName}-${index}`}><td>{row.attendanceDate}</td>{showCrew && <td>{row.crewName}</td>}<td><strong>{row.studentName}</strong>{row.hasImportantNote && <span className="important-badge">확인 필요</span>}</td><td>{membershipLabel(row.membershipStatus)}</td><td><span className={`table-status ${row.attendanceStatus}`}>{attendanceLabel(row.attendanceStatus)}</span></td><td>{row.attendanceStatus === 'absent' ? row.absenceReason || contactLabel(row.contactStatus) : '-'}</td><td>{row.specialNote || '-'}</td><td>{row.actorName}<small>{row.actorType}</small></td><td>{row.updatedAt.slice(0, 16).replace('T', ' ')}</td></tr>)}</tbody></table></div>
+}
+
 function RecordsTable({ rows, loading, compact = false }: { rows: AttendanceExportRow[]; loading: boolean; compact?: boolean }) {
-  return <section className="data-card"><div className="data-card-header"><div><h2>{compact ? '변경 내역' : '출석 상세'}</h2><p>총 {rows.length}건 · 노란색 표시는 확인할 비고가 있는 학생입니다.</p></div></div><div className="table-scroll">{loading ? <LoadingBlock label="데이터를 불러오는 중" /> : <table><thead><tr><th>출석일</th><th>크루</th><th>학생명</th><th>학생상태</th><th>출석상태</th><th>결석 사유·연락</th><th>학생 비고</th><th>체크자</th><th>최종수정</th></tr></thead><tbody>{rows.map((row, index) => <tr className={row.hasImportantNote ? 'important-row' : ''} key={`${row.attendanceDate}-${row.crewName}-${row.studentName}-${index}`}><td>{row.attendanceDate}</td><td>{row.crewName}</td><td><strong>{row.studentName}</strong>{row.hasImportantNote && <span className="important-badge">확인 필요</span>}</td><td>{membershipLabel(row.membershipStatus)}</td><td><span className={`table-status ${row.attendanceStatus}`}>{attendanceLabel(row.attendanceStatus)}</span></td><td>{row.absenceReason || contactLabel(row.contactStatus)}</td><td>{row.specialNote || '-'}</td><td>{row.actorName}<small>{row.actorType}</small></td><td>{row.updatedAt.slice(0, 16).replace('T', ' ')}</td></tr>)}</tbody></table>}</div></section>
+  const groups = useMemo(() => Object.entries(rows.reduce<Record<string, AttendanceExportRow[]>>((result, row) => {
+    result[row.crewName] = [...(result[row.crewName] ?? []), row]
+    return result
+  }, {})).sort(([left], [right]) => left.localeCompare(right, 'ko')), [rows])
+  return <section className="data-card"><div className="data-card-header"><div><h2>{compact ? '변경 내역' : '출석 상세'}</h2><p>총 {rows.length}건 · 노란색 표시는 확인할 비고가 있는 학생입니다.</p></div></div>{loading ? <LoadingBlock label="데이터를 불러오는 중" /> : compact ? <AttendanceDataTable rows={rows} showCrew /> : <div className="crew-record-groups">{groups.map(([crewName, crewRows]) => {
+    const present = crewRows.filter((row) => row.attendanceStatus === 'present').length
+    const absent = crewRows.filter((row) => row.attendanceStatus === 'absent').length
+    const unchecked = crewRows.filter((row) => row.attendanceStatus === 'unchecked').length
+    const counted = present + absent
+    const rate = counted ? Math.round(present / counted * 1000) / 10 : 0
+    return <details key={crewName} open={groups.length === 1 ? true : undefined} className="crew-record-group"><summary><span className="crew-record-name"><ChevronDown />{crewName}<small>{crewRows.length}건</small></span><span className="crew-record-stats"><b className="present">출석 {present}</b><b className="absent">결석 {absent}</b><b className="unchecked">미체크 {unchecked}</b><b className="rate">출석률 {rate}%</b></span></summary><AttendanceDataTable rows={crewRows} showCrew={false} /></details>
+  })}{!groups.length && <p className="empty-result">조회된 출석 기록이 없습니다.</p>}</div>}</section>
 }
 
 function FeedbackButton({ onClick }: { onClick: () => void }) { return <button className="feedback-fab" onClick={onClick}><MessageSquare />오류·개선 의견 보내기</button> }

@@ -12,6 +12,9 @@ import type {
   CustomField,
   FeedbackItem,
   AdminWorkspaceData,
+  AttendanceReminderCrew,
+  PushConfig,
+  ReminderSendResult,
 } from '../types'
 import { demoCards, demoExecutive, demoRows, demoSnapshot, demoSummary } from './mock'
 
@@ -68,6 +71,32 @@ export const api = {
     await supabase.auth.signOut()
   },
 
+  async changePin(currentPin: string, newPin: string): Promise<void> {
+    if (isDemoMode) return
+    await invoke('teacher-change-pin', { currentPin, newPin })
+  },
+
+  async pushConfig(): Promise<PushConfig> {
+    if (isDemoMode) return { publicKey: 'demo', subscribed: false }
+    return invoke<PushConfig>('push-config')
+  },
+
+  async savePushSubscription(subscription: PushSubscription): Promise<void> {
+    if (isDemoMode) return
+    const json = subscription.toJSON()
+    await invoke('push-subscribe', {
+      endpoint: subscription.endpoint,
+      p256dh: json.keys?.p256dh,
+      auth: json.keys?.auth,
+      userAgent: navigator.userAgent,
+    })
+  },
+
+  async removePushSubscription(endpoint: string): Promise<void> {
+    if (isDemoMode) return
+    await invoke('push-unsubscribe', { endpoint })
+  },
+
   async assistantStart(crewId: string, name: string): Promise<AttendanceSnapshot> {
     if (isDemoMode) return demoSnapshot(name, 'assistant')
     const snapshot = await invoke<AttendanceSnapshot & { token: string }>('assistant-start', { crewId, name })
@@ -115,6 +144,16 @@ export const api = {
 
   async dashboard(filters: Record<string, string>): Promise<{ summary: DashboardSummary; rows: AttendanceExportRow[] }> {
     return isDemoMode ? { summary: demoSummary, rows: demoRows } : invoke('dashboard', filters)
+  },
+
+  async reminderStatus(date: string): Promise<AttendanceReminderCrew[]> {
+    if (isDemoMode) return [{ crewId: 'crew-1', crewName: '이창현 크루', teacherId: 'teacher-1', teacherName: '이창현', attendanceDate: date, checked: 0, total: 8, status: 'not_started', notificationDevices: 1 }]
+    return invoke<AttendanceReminderCrew[]>('admin-reminder-status', { date })
+  },
+
+  async sendAttendanceReminder(crewId: string, date: string): Promise<ReminderSendResult> {
+    if (isDemoMode) return { sent: 1, failed: 0, message: '이창현 선생님의 휴대폰 1대에 알림을 보냈습니다.' }
+    return invoke<ReminderSendResult>('admin-send-attendance-reminder', { crewId, date })
   },
 
   async adminWorkspace(): Promise<AdminWorkspaceData> {
