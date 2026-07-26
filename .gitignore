@@ -13,3 +13,4 @@ vite.config.d.ts
 vitest.config.js
 vitest.config.d.ts
 docs/rendered/
+supabase/.temp/

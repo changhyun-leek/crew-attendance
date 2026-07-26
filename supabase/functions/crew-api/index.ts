@@ -539,7 +539,7 @@ async function updateFeedback(req: Request, body: Json) {
   return { ok: true }
 }
 
-Deno.serve(async (req) => {
+async function handleRequest(req: Request) {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors(req.headers.get('origin')) })
   if (req.method !== 'POST') return fail(req, 'POST 요청만 지원합니다.', 405)
   try {
@@ -576,4 +576,9 @@ Deno.serve(async (req) => {
     console.error(error)
     return fail(req, error instanceof Error ? error.message : '요청 처리 중 오류가 발생했습니다.', 400)
   }
-})
+}
+
+// Supabase Dashboard's current Edge Function editor expects the module-style
+// fetch entry point. Keeping the request handler separate also makes the same
+// source straightforward to exercise in local checks.
+export default { fetch: handleRequest }
