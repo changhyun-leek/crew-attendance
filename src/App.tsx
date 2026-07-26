@@ -26,6 +26,7 @@ import { api, isDemoMode } from './lib/api'
 import { lastSunday } from './lib/date'
 import { buildReportText, downloadText, rowsToCsv, rowsToTsv } from './lib/export'
 import { PwaInstallControl, PwaUpdateNotice } from './PwaInstall'
+import { ThemeControl } from './Theme'
 import type {
   AttendanceExportRow,
   AttendanceMember,
@@ -127,6 +128,7 @@ function LoginPage({ onLogin, onAssistant }: {
   }
 
   return <main className="login-shell">
+    <div className="login-theme-control"><ThemeControl /></div>
     <section className="login-hero">
       <div className="brand-mark" aria-hidden="true"><span /></div>
       <p className="eyebrow">생명샘동천교회</p>
@@ -202,7 +204,7 @@ function PinModal({ card, onClose, onAssistant, onSuccess }: {
         {digits.map((digit) => <button key={digit} disabled={busy || pin.length >= 6} onClick={() => setPin(`${pin}${digit}`)}>{digit}</button>)}
         <button aria-label="한 자리 지우기" disabled={busy || !pin} onClick={() => setPin(pin.slice(0, -1))}>←</button>
         <button disabled={busy || pin.length >= 6} onClick={() => setPin(`${pin}0`)}>0</button>
-        <button className="keypad-confirm" disabled={busy || pin.length < 4} onClick={submit}>{busy ? <RefreshCw className="spin" /> : <Check />}</button>
+        <button className="keypad-confirm" aria-label="PIN 확인" disabled={busy || pin.length < 4} onClick={submit}>{busy ? <RefreshCw className="spin" /> : <Check />}</button>
       </div>
       {card.role !== 'executive' && <button className="assistant-link" onClick={onAssistant}>보조교사로 출석하기</button>}
     </section>
@@ -339,6 +341,7 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
       <button className="header-user" onClick={assistantMode ? () => setNameEditOpen(true) : undefined}>
         <span>{data?.actor.name ?? profile?.name}</span><small>{assistantMode ? '보조교사 · 이름 수정' : '담당교사'}</small>
       </button>
+      <ThemeControl variant="compact" />
       <button className="icon-button" onClick={onLogout} aria-label="나가기"><LogOut /></button>
     </header>
     <section className="attendance-sticky">
@@ -457,7 +460,7 @@ function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfi
     <aside className={mobileNav ? 'dashboard-nav open' : 'dashboard-nav'}>
       <div className="dashboard-brand"><div className="brand-mark small"><span /></div><div><strong>새벽이슬</strong><small>출석관리</small></div></div>
       <nav>{nav.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => { setTab(id); setMobileNav(false) }}><Icon />{label}</button>)}</nav>
-      <div className="nav-user"><span>{profile.name}</span><small>임원 관리자</small><button onClick={onLogout}><LogOut />로그아웃</button></div>
+      <div className="nav-user"><span>{profile.name}</span><small>임원 관리자</small><ThemeControl variant="nav" /><button onClick={onLogout}><LogOut />로그아웃</button></div>
     </aside>
     <main className="dashboard-main">
       <header className="dashboard-header"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="메뉴"><Menu /></button><div><p className="eyebrow">임원 전용</p><h1>{nav.find(([id]) => id === tab)?.[1]}</h1></div><div className="export-buttons"><button onClick={txt}><Download />TXT</button><button onClick={csv}><Download />CSV</button><button onClick={copyTable}><Clipboard />Excel용 표 복사</button></div></header>

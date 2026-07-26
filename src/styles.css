@@ -2,9 +2,11 @@
 
 :root {
   font-family: 'Noto Sans KR', system-ui, sans-serif;
-  color: #1e1b2e;
-  background: #f7f6fb;
+  color: var(--text);
+  background: var(--page);
   font-synthesis: none;
+  --page: #f7f6fb;
+  --text: #1e1b2e;
   --primary: #5b21b6;
   --primary-dark: #3b0764;
   --primary-soft: #f1eafe;
@@ -21,7 +23,7 @@
 
 * { box-sizing: border-box; }
 html { min-width: 320px; min-height: 100%; }
-body { margin: 0; min-height: 100vh; background: #f7f6fb; }
+body { margin: 0; min-height: 100vh; background: var(--page); color: var(--text); transition: background-color .2s, color .2s; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; touch-action: manipulation; }
 button:disabled { cursor: not-allowed; opacity: .55; }
@@ -120,7 +122,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); }
 .attendance-shell { width: min(100%, 760px); min-height: 100vh; margin: 0 auto; padding-bottom: calc(30px + env(safe-area-inset-bottom)); background: #f7f6fb; }
 .offline-banner { position: sticky; z-index: 30; top: 0; display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 45px; padding: 8px 14px; background: #7c1d1d; color: #fff; font-size: 13px; font-weight: 700; }
 .offline-banner svg { width: 18px; }
-.attendance-header { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 8px; padding: max(20px, env(safe-area-inset-top)) 16px 12px; background: #fff; }
+.attendance-header { display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 8px; padding: max(20px, env(safe-area-inset-top)) 16px 12px; background: #fff; }
 .attendance-header h1 { margin: 0; font-size: 24px; letter-spacing: -.035em; }
 .header-user { min-height: 44px; padding: 5px 8px; border: 0; border-radius: 10px; color: #362b45; background: transparent; text-align: right; }
 .header-user span, .header-user small { display: block; }
@@ -327,6 +329,150 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .pwa-update-notice > button:not(.icon-button) { min-height: 44px; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px; border: 0; border-radius: 11px; background: var(--primary); color: #fff; font-weight: 800; }
 .pwa-update-notice > button svg { width: 18px; }
 
+.login-shell { position: relative; }
+.login-theme-control { position: absolute; z-index: 12; top: max(14px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right)); }
+.theme-trigger { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); color: var(--text); box-shadow: 0 5px 18px rgba(42, 28, 58, .08); font-size: 13px; font-weight: 800; transition: border-color .18s, background .18s; }
+.theme-trigger:hover { border-color: #9f75d5; background: #faf7ff; }
+.theme-trigger svg { width: 19px; }
+.theme-trigger.compact { min-width: 46px; padding: 0 10px; box-shadow: none; }
+.theme-trigger.nav { width: 100%; min-height: 44px; justify-content: flex-start; margin-top: 11px; border-color: #574364; background: #342142; color: #f6effb; box-shadow: none; }
+.theme-trigger.nav:hover { border-color: #8c6aa3; background: #442b55; }
+.theme-modal-backdrop { z-index: 85; }
+.theme-dialog { width: min(100%, 470px); }
+.theme-dialog h2 { margin-bottom: 8px; font-size: 24px; }
+.theme-choice-list { display: grid; gap: 9px; margin-top: 20px; }
+.theme-choice-list > button { min-height: 72px; width: 100%; display: grid; grid-template-columns: 48px 1fr 28px; align-items: center; gap: 12px; padding: 10px 13px; border: 2px solid var(--border); border-radius: 15px; background: var(--surface); color: var(--text); text-align: left; transition: border-color .18s, background .18s; }
+.theme-choice-list > button:hover { border-color: #9f75d5; }
+.theme-choice-list > button.selected { border-color: var(--primary); background: var(--primary-soft); }
+.theme-choice-icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 13px; background: var(--primary-soft); color: var(--primary); }
+.theme-choice-icon svg { width: 23px; }
+.theme-choice-list strong, .theme-choice-list small { display: block; }
+.theme-choice-list strong { font-size: 16px; }
+.theme-choice-list small { margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.theme-choice-check { width: 24px; color: var(--primary); }
+
+[data-theme='dark'] {
+  --page: #0f0b16;
+  --text: #f8f5fb;
+  --primary: #6d28d9;
+  --primary-dark: #3b0764;
+  --primary-soft: #302044;
+  --gold: #f2c94c;
+  --green: #087f5b;
+  --green-soft: #102e26;
+  --red: #c92a2a;
+  --red-soft: #35191c;
+  --border: #493a56;
+  --muted: #c9c0d2;
+  --surface: #1b1424;
+  --shadow: 0 14px 38px rgba(0, 0, 0, .32);
+}
+[data-theme='dark'] .login-shell { background: radial-gradient(circle at 80% 0%, #2e1748 0, transparent 34%), linear-gradient(180deg, #130d1c, #0f0b16); }
+[data-theme='dark'] .login-hero h1 { color: #f7f0ff; }
+[data-theme='dark'] .login-panel { border-color: rgba(93, 72, 108, .9); background: rgba(27, 20, 36, .96); }
+[data-theme='dark'] .role-entry-grid > button,
+[data-theme='dark'] .teacher-search,
+[data-theme='dark'] .teacher-card,
+[data-theme='dark'] .executive-cards button,
+[data-theme='dark'] .pin-sheet,
+[data-theme='dark'] .assistant-sheet,
+[data-theme='dark'] .small-dialog,
+[data-theme='dark'] .details-sheet,
+[data-theme='dark'] .attendance-header,
+[data-theme='dark'] .attendance-row,
+[data-theme='dark'] .long-absence-card,
+[data-theme='dark'] .management-card,
+[data-theme='dark'] .secondary-button,
+[data-theme='dark'] .outline-danger,
+[data-theme='dark'] .filter-bar,
+[data-theme='dark'] .summary-card,
+[data-theme='dark'] .data-card,
+[data-theme='dark'] .management-intro,
+[data-theme='dark'] .admin-form,
+[data-theme='dark'] .management-help,
+[data-theme='dark'] .management-list,
+[data-theme='dark'] .management-actions button,
+[data-theme='dark'] .workspace-current article,
+[data-theme='dark'] .pwa-install-launcher,
+[data-theme='dark'] .pwa-update-notice { background: var(--surface); color: var(--text); }
+[data-theme='dark'] .role-entry-grid > button:hover,
+[data-theme='dark'] .teacher-card:hover,
+[data-theme='dark'] .theme-trigger:hover { border-color: #9b7ac2; background: #281d34; }
+[data-theme='dark'] .empty-result,
+[data-theme='dark'] .keypad button,
+[data-theme='dark'] .count.unchecked,
+[data-theme='dark'] .status-buttons button,
+[data-theme='dark'] .temporary-fields,
+[data-theme='dark'] .pwa-manual-guide,
+[data-theme='dark'] th { background: #241a30; color: #d8cede; }
+[data-theme='dark'] input,
+[data-theme='dark'] select,
+[data-theme='dark'] textarea { border-color: #584764; background: #15101d; color: #fbf8fd; }
+[data-theme='dark'] input::placeholder,
+[data-theme='dark'] textarea::placeholder { color: #a89eb2; }
+[data-theme='dark'] label,
+[data-theme='dark'] .executive-entry summary,
+[data-theme='dark'] .header-user,
+[data-theme='dark'] .status-buttons button,
+[data-theme='dark'] td,
+[data-theme='dark'] .export-buttons button { color: var(--text); }
+[data-theme='dark'] .eyebrow,
+[data-theme='dark'] .back-link,
+[data-theme='dark'] .teacher-search svg,
+[data-theme='dark'] .details-button,
+[data-theme='dark'] .long-row button,
+[data-theme='dark'] .manage-list button,
+[data-theme='dark'] .temporary-fields h3,
+[data-theme='dark'] .management-help svg,
+[data-theme='dark'] .workspace-current article svg,
+[data-theme='dark'] .pwa-guide-title { color: #c4b5fd; }
+[data-theme='dark'] .attendance-shell,
+[data-theme='dark'] .dashboard-shell { background: var(--page); }
+[data-theme='dark'] .attendance-sticky { background: rgba(27, 20, 36, .96); }
+[data-theme='dark'] .announcement-stack article,
+[data-theme='dark'] .pwa-browser-warning { border-color: #806822; background: #30280f; color: #ffe8a3; }
+[data-theme='dark'] .privacy-note { background: #30280f; color: #ffe8a3; }
+[data-theme='dark'] .count.present,
+[data-theme='dark'] .table-status.present,
+[data-theme='dark'] .feedback-status.done,
+[data-theme='dark'] .pwa-safety-note { color: #83e6c1; }
+[data-theme='dark'] .count.absent,
+[data-theme='dark'] .table-status.absent,
+[data-theme='dark'] .inline-error,
+[data-theme='dark'] .manage-list .text-danger,
+[data-theme='dark'] .outline-danger { color: #ffaaa9; }
+[data-theme='dark'] .count.unchecked,
+[data-theme='dark'] .table-status.unchecked { background: #2a2231; color: #ddd5e3; }
+[data-theme='dark'] .details-button,
+[data-theme='dark'] .long-row button,
+[data-theme='dark'] .recent-names button { border-color: #715591; background: #291d35; color: #c4b5fd; }
+[data-theme='dark'] .secondary-button { color: #eee7f3; }
+[data-theme='dark'] .outline-danger { background: #21151c; }
+[data-theme='dark'] .icon-button { color: #ddd3e5; }
+[data-theme='dark'] .icon-button:hover { background: #30263a; }
+[data-theme='dark'] .keypad button { color: #f3edf7; }
+[data-theme='dark'] .keypad button:active { background: #3a2850; }
+[data-theme='dark'] .dashboard-nav { background: #140d1c; }
+[data-theme='dark'] .dashboard-nav nav button:hover,
+[data-theme='dark'] .dashboard-nav nav button.active { background: #4b2764; }
+[data-theme='dark'] .mobile-menu { background: var(--surface); color: var(--text); }
+[data-theme='dark'] td { border-bottom-color: #3c3047; }
+[data-theme='dark'] tbody tr:hover { background: #251b30; }
+[data-theme='dark'] .important-row,
+[data-theme='dark'] .feedback-list article.new { background: #30280f; }
+[data-theme='dark'] .important-row:hover { background: #3b310f; }
+[data-theme='dark'] .notice { border-color: #276c55; background: #102e26; color: #83e6c1; }
+[data-theme='dark'] .management-actions .danger-button { border-color: #7d4447; background: #2b171c; color: #ffaaa9; }
+[data-theme='dark'] .feedback-status { background: #30263a; }
+[data-theme='dark'] .feedback-status.new { background: #594615; color: #ffe299; }
+[data-theme='dark'] .feedback-status.reviewing { background: #1d3559; color: #b9d2ff; }
+[data-theme='dark'] .pwa-install-launcher { border-color: #8b5cf6; }
+[data-theme='dark'] .pwa-install-launcher strong,
+[data-theme='dark'] .pwa-install-launcher small,
+[data-theme='dark'] .pwa-install-copy,
+[data-theme='dark'] .pwa-manual-guide li { color: #e7dfec; }
+[data-theme='dark'] .theme-choice-icon { color: #c4b5fd; }
+
 @media (min-width: 700px) {
   .login-shell { grid-template-columns: .9fr 1.1fr; grid-template-rows: 1fr auto; align-items: center; padding: 36px; }
   .login-hero { padding: 30px 36px; }
@@ -361,6 +507,11 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 }
 
 @media (max-width: 600px) {
+  .theme-trigger.compact span { display: none; }
+  .theme-trigger.compact { width: 44px; min-width: 44px; height: 44px; padding: 0; }
+  .attendance-header { gap: 4px; padding-right: 10px; padding-left: 12px; }
+  .header-user { max-width: 108px; overflow: hidden; }
+  .header-user span, .header-user small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pwa-install-launcher { bottom: calc(72px + env(safe-area-inset-bottom)); min-height: 50px; padding: 5px 12px 5px 10px; }
   .pwa-install-launcher small { display: none; }
   .pwa-install-dialog { border-radius: 28px 28px 0 0; }

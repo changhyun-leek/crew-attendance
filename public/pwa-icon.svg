@@ -1,19 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
   <title id="title">새벽이슬 청소년부 출석관리</title>
-  <desc id="description">보라색 바탕 위 금색 십자가와 새벽빛을 표현한 아이콘</desc>
+  <desc id="description">보라색 바탕 위 금색 십자가, 출석 체크와 새벽빛을 표현한 아이콘</desc>
   <defs>
     <linearGradient id="background" x1="72" y1="48" x2="440" y2="464" gradientUnits="userSpaceOnUse">
       <stop stop-color="#3B0764"/>
       <stop offset="1" stop-color="#7C3AED"/>
     </linearGradient>
-    <linearGradient id="gold" x1="184" y1="128" x2="344" y2="384" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF1A8"/>
-      <stop offset="1" stop-color="#E9B949"/>
+    <linearGradient id="gold" x1="154" y1="126" x2="382" y2="402" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD54F"/>
+      <stop offset="1" stop-color="#F2B51D"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#background)"/>
-  <circle cx="256" cy="256" r="166" fill="#FFFFFF" opacity=".08"/>
-  <path d="M229 128h54v101h91v54h-91v128h-54V283h-91v-54h91V128Z" fill="url(#gold)"/>
-  <circle cx="384" cy="118" r="20" fill="#FFF1A8"/>
-  <path d="M384 76v18M384 142v18M342 118h18M408 118h18M354 88l13 13M401 135l13 13M414 88l-13 13M367 135l-13 13" stroke="#FFF1A8" stroke-width="10" stroke-linecap="round"/>
+  <path d="M218 112h66v113h102v66H284v110h-66V291H116v-66h102V112Z" fill="url(#gold)"/>
+  <path d="M201 318 260 377 399 224" fill="none" stroke="url(#gold)" stroke-width="45" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M385 92c4 24 15 35 39 39-24 4-35 15-39 39-4-24-15-35-39-39 24-4 35-15 39-39Z" fill="#FFD54F"/>
 </svg>

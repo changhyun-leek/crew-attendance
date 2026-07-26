@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -34,5 +34,11 @@ describe('설치형 웹앱 설정', () => {
     expect(worker).toContain("request.mode === 'navigate'")
     expect(worker).toContain("'script', 'style', 'image', 'font', 'manifest'")
     expect(worker).not.toContain('supabase.co')
+  })
+
+  it('확정된 휴대폰용과 컴퓨터용 아이콘 파일을 함께 제공한다', () => {
+    expect(statSync(join(process.cwd(), 'public/mobile-icon-1024x1024.png')).size).toBeGreaterThan(10_000)
+    expect(statSync(join(process.cwd(), 'public/desktop-icon-512x512.png')).size).toBeGreaterThan(10_000)
+    expect(statSync(join(process.cwd(), 'public/favicon.ico')).size).toBeGreaterThan(1_000)
   })
 })
