@@ -1,0 +1,4 @@
+project_id = "zzavmguguvuqgdblmkcj"
+
+[functions.crew-api]
+verify_jwt = false
