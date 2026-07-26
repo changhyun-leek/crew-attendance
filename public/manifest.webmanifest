@@ -1,0 +1,25 @@
+{
+  "id": "/crew-attendance/",
+  "name": "새벽이슬 청소년부 출석관리",
+  "short_name": "새벽이슬 출석",
+  "description": "생명샘동천교회 새벽이슬 청소년부 교사 출석관리",
+  "lang": "ko-KR",
+  "start_url": "/crew-attendance/",
+  "scope": "/crew-attendance/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#faf5ff",
+  "theme_color": "#4c1d95",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "pwa-64x64.png", "sizes": "64x64", "type": "image/png" },
+    { "src": "pwa-192x192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "pwa-512x512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "maskable-icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "크루교사 출석체크", "short_name": "크루교사", "url": "/crew-attendance/?role=teacher" },
+    { "name": "보조교사 출석체크", "short_name": "보조교사", "url": "/crew-attendance/?role=assistant" },
+    { "name": "임원교사 관리", "short_name": "임원교사", "url": "/crew-attendance/?role=executive" }
+  ]
+}

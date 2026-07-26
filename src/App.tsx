@@ -25,6 +25,7 @@ import {
 import { api, isDemoMode } from './lib/api'
 import { lastSunday } from './lib/date'
 import { buildReportText, downloadText, rowsToCsv, rowsToTsv } from './lib/export'
+import { PwaInstallControl, PwaUpdateNotice } from './PwaInstall'
 import type {
   AttendanceExportRow,
   AttendanceMember,
@@ -73,7 +74,7 @@ function App() {
   }
 
   if (screen === 'login') {
-    return <><LoginPage onLogin={(nextProfile) => {
+    return <><PwaInstallControl /><PwaUpdateNotice /><LoginPage onLogin={(nextProfile) => {
       setProfile(nextProfile)
       setScreen(nextProfile.role === 'executive' ? 'dashboard' : 'attendance')
     }} onAssistant={(nextSnapshot) => {
@@ -84,10 +85,10 @@ function App() {
   }
 
   if (screen === 'dashboard' && profile?.role === 'executive') {
-    return <><ExecutiveDashboard profile={profile} onLogout={logout} /><FeedbackButton onClick={() => setFeedbackOpen(true)} />{feedbackOpen && <FeedbackDialog actorName={profile.name} actorRole="executive" page="임원 화면" onClose={() => setFeedbackOpen(false)} />}</>
+    return <><PwaInstallControl /><PwaUpdateNotice /><ExecutiveDashboard profile={profile} onLogout={logout} /><FeedbackButton onClick={() => setFeedbackOpen(true)} />{feedbackOpen && <FeedbackDialog actorName={profile.name} actorRole="executive" page="임원 화면" onClose={() => setFeedbackOpen(false)} />}</>
   }
 
-  return <><AttendancePage
+  return <><PwaInstallControl /><PwaUpdateNotice /><AttendancePage
     profile={profile}
     initialSnapshot={snapshot}
     assistantMode={assistantMode}
@@ -100,7 +101,10 @@ function LoginPage({ onLogin, onAssistant }: {
   onLogin: (profile: AuthenticatedProfile) => void
   onAssistant: (snapshot: AttendanceSnapshot) => void
 }) {
-  const [entry, setEntry] = useState<'choose' | 'teacher' | 'executive' | 'assistant'>('choose')
+  const [entry, setEntry] = useState<'choose' | 'teacher' | 'executive' | 'assistant'>(() => {
+    const role = new URLSearchParams(window.location.search).get('role')
+    return role === 'teacher' || role === 'executive' || role === 'assistant' ? role : 'choose'
+  })
   const [cards, setCards] = useState<CrewLoginCard[]>([])
   const [selected, setSelected] = useState<CrewLoginCard | null>(null)
   const [assistantCard, setAssistantCard] = useState<CrewLoginCard | null>(null)
