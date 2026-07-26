@@ -35,6 +35,7 @@ import type {
   CrewLoginCard,
   DashboardSummary,
   FeedbackItem,
+  AdminWorkspaceData,
 } from './types'
 
 type Screen = 'login' | 'attendance' | 'dashboard'
@@ -496,21 +497,66 @@ function ExecutiveWorkspace({ tab, onNotice }: { tab: 'notices' | 'feedback'; on
 }
 
 function AdminManagement({ tab, onDone }: { tab: 'crews' | 'teachers' | 'students'; onDone: () => void }) {
+  const [workspace, setWorkspace] = useState<AdminWorkspaceData | null>(null)
   const [name, setName] = useState('')
   const [pin, setPin] = useState('')
   const [extra, setExtra] = useState('')
   const [busy, setBusy] = useState(false)
-  const labels = tab === 'crews' ? ['새 크루 만들기', '크루명', '운영 연도'] : tab === 'teachers' ? ['교사·임원 등록', '이름', '4~6자리 PIN'] : ['학생 등록·이동', '학생 이름', '크루 ID']
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true)
-    try {
-      if (tab === 'crews') await api.adminAction('admin-manage-crew', { operation: 'create', name, year: Number(extra) || new Date().getFullYear() })
-      if (tab === 'teachers') await api.adminAction('admin-create-user', { name, pin, role: extra || 'teacher' })
-      if (tab === 'students') await api.adminAction('admin-manage-student', { operation: 'create', name, crewId: extra })
-      setName(''); setPin(''); setExtra(''); onDone()
-    } finally { setBusy(false) }
+  const [crewTeachers, setCrewTeachers] = useState<Record<string, string>>({})
+  const [resetPins, setResetPins] = useState<Record<string, string>>({})
+  const [moveTargets, setMoveTargets] = useState<Record<string, string>>({})
+  const [studentSearch, setStudentSearch] = useState('')
+
+  async function load() {
+    const data = await api.adminWorkspace()
+    setWorkspace(data)
+    setCrewTeachers(Object.fromEntries(data.crews.map((crew) => [crew.id, crew.teacherId ?? ''])))
   }
-  return <section className="management-page"><div className="management-intro"><h2>{labels[0]}</h2><p>기존 기록을 삭제하지 않고 활성 상태와 배정 기간으로 관리합니다.</p></div><form className="admin-form" onSubmit={submit}><label>{labels[1]}<input required value={name} onChange={(event) => setName(event.target.value)} /></label>{tab === 'teachers' && <label>{labels[2]}<input required inputMode="numeric" pattern="[0-9]{4,6}" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 6))} /></label>}<label>{tab === 'teachers' ? '역할' : labels[2]}{tab === 'teachers' ? <select value={extra} onChange={(event) => setExtra(event.target.value)}><option value="teacher">담당교사</option><option value="executive">임원</option></select> : <input value={extra} onChange={(event) => setExtra(event.target.value)} />}</label><button className="primary-button" disabled={busy}>{busy ? '저장 중…' : '저장'}</button></form><div className="management-help"><ShieldCheck /><div><strong>기록 보존 원칙</strong><p>장기결석·퇴실·담당교사 교체 후에도 과거 출석은 그대로 남습니다.</p></div></div></section>
+  useEffect(() => { void load() }, [tab])
+
+  async function run(action: string, payload: Record<string, unknown>, confirmation?: string) {
+    if (confirmation && !window.confirm(confirmation)) return
+    setBusy(true)
+    try { await api.adminAction(action, payload); await load(); onDone() }
+    catch (reason) { window.alert(reason instanceof Error ? reason.message : '저장하지 못했습니다.') }
+    finally { setBusy(false) }
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    try {
+      if (tab === 'crews') await run('admin-manage-crew', { operation: 'create', name, year: Number(extra) || new Date().getFullYear() })
+      if (tab === 'teachers') await run('admin-create-user', { name, pin, role: extra || 'teacher' })
+      if (tab === 'students') await run('admin-manage-student', { operation: 'create', name, crewId: extra })
+      setName(''); setPin(''); setExtra('')
+    } catch { /* run() reports a clear message */ }
+  }
+
+  if (!workspace) return <LoadingBlock label="관리 목록을 불러오는 중" />
+  const activeCrews = workspace.crews.filter((crew) => crew.active)
+  const teachers = workspace.users.filter((user) => user.role === 'teacher' && user.active)
+  const visibleMemberships = workspace.memberships.filter((member) => member.studentName.includes(studentSearch.trim()))
+
+  return <section className="management-stack">
+    <div className="management-page">
+      <div className="management-intro"><h2>{tab === 'crews' ? '새 크루 만들기' : tab === 'teachers' ? '교사·임원 등록' : '학생 등록'}</h2><p>이름을 보고 선택할 수 있도록 구성했습니다. 기존 기록은 삭제하지 않습니다.</p></div>
+      <form className="admin-form" onSubmit={submit}>
+        <label>{tab === 'crews' ? '크루명' : tab === 'teachers' ? '교사 이름' : '학생 이름'}<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+        {tab === 'teachers' && <label>처음 사용할 4~6자리 PIN<input required inputMode="numeric" pattern="[0-9]{4,6}" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 6))} /></label>}
+        <label>{tab === 'crews' ? '운영 연도' : tab === 'teachers' ? '역할' : '소속 크루'}
+          {tab === 'teachers' ? <select value={extra || 'teacher'} onChange={(event) => setExtra(event.target.value)}><option value="teacher">담당교사</option><option value="executive">임원교사</option></select> : tab === 'students' ? <select required value={extra} onChange={(event) => setExtra(event.target.value)}><option value="">크루 선택</option>{activeCrews.map((crew) => <option key={crew.id} value={crew.id}>{crew.name}</option>)}</select> : <input inputMode="numeric" value={extra} onChange={(event) => setExtra(event.target.value.replace(/\D/g, '').slice(0, 4))} placeholder={String(new Date().getFullYear())} />}
+        </label>
+        <button className="primary-button" disabled={busy}>{busy ? '저장 중…' : '등록'}</button>
+      </form>
+      <div className="management-help"><ShieldCheck /><div><strong>기록 보존 원칙</strong><p>장기결석·퇴실·크루 이동·담당교사 교체 후에도 과거 출석은 그대로 남습니다.</p></div></div>
+    </div>
+
+    {tab === 'crews' && <div className="management-list"><h2>크루와 담당교사</h2>{workspace.crews.map((crew) => <article key={crew.id} className={!crew.active ? 'inactive' : ''}><div><strong>{crew.name}</strong><small>{crew.operatingYear}년 · {crew.active ? '운영 중' : '운영 종료'}{crew.teacherName ? ` · ${crew.teacherName} 선생님` : ' · 담당교사 미배정'}</small></div>{crew.active && <div className="management-actions"><select aria-label={`${crew.name} 담당교사`} value={crewTeachers[crew.id] ?? ''} onChange={(event) => setCrewTeachers({ ...crewTeachers, [crew.id]: event.target.value })}><option value="">담당교사 선택</option>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select><button disabled={busy || !crewTeachers[crew.id]} onClick={() => void run('admin-manage-crew', { operation: 'assign', crewId: crew.id, profileId: crewTeachers[crew.id] })}>배정 저장</button><button className="danger-button" disabled={busy} onClick={() => void run('admin-manage-crew', { operation: 'end', crewId: crew.id }, `${crew.name} 운영을 종료할까요? 과거 기록은 유지됩니다.`)}>운영 종료</button></div>}</article>)}</div>}
+
+    {tab === 'teachers' && <div className="management-list"><h2>등록된 교사</h2>{workspace.users.map((user) => <article key={user.id} className={!user.active ? 'inactive' : ''}><div><strong>{user.name}</strong><small>{user.role === 'executive' ? '임원교사' : '담당교사'} · {user.active ? '사용 중' : '비활성'}</small></div><div className="management-actions"><input aria-label={`${user.name} 새 PIN`} inputMode="numeric" placeholder="새 PIN" value={resetPins[user.id] ?? ''} onChange={(event) => setResetPins({ ...resetPins, [user.id]: event.target.value.replace(/\D/g, '').slice(0, 6) })} /><button disabled={busy || (resetPins[user.id]?.length ?? 0) < 4} onClick={() => void run('admin-reset-pin', { profileId: user.id, pin: resetPins[user.id] }, `${user.name} 선생님의 PIN을 초기화할까요?`)}>PIN 초기화</button><button className={user.active ? 'danger-button' : ''} disabled={busy} onClick={() => void run('admin-manage-user', { operation: 'set-active', profileId: user.id, active: !user.active }, `${user.name} 계정을 ${user.active ? '비활성화' : '다시 활성화'}할까요?`)}>{user.active ? '비활성화' : '활성화'}</button></div></article>)}</div>}
+
+    {tab === 'students' && <div className="management-list"><div className="management-list-header"><h2>학생 상태와 크루 이동</h2><input aria-label="학생 이름 검색" placeholder="학생 이름 검색" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></div>{visibleMemberships.map((member) => <article key={member.id}><div><strong>{member.studentName}</strong><small>{member.crewName} · {membershipLabel(member.status)}</small></div><div className="management-actions"><select aria-label={`${member.studentName} 상태`} value={member.status} onChange={(event) => void run('admin-manage-student', { operation: 'status', membershipId: member.id, status: event.target.value }, event.target.value === 'left' ? `${member.studentName} 학생을 퇴실 처리할까요?` : undefined)}><option value="active">활동</option><option value="long_absence">장기결석</option><option value="left">퇴실</option></select><select aria-label={`${member.studentName} 이동할 크루`} value={moveTargets[member.id] ?? ''} onChange={(event) => setMoveTargets({ ...moveTargets, [member.id]: event.target.value })}><option value="">이동할 크루</option>{activeCrews.filter((crew) => crew.id !== member.crewId).map((crew) => <option key={crew.id} value={crew.id}>{crew.name}</option>)}</select><button disabled={busy || !moveTargets[member.id]} onClick={() => void run('admin-manage-student', { operation: 'move', membershipId: member.id, targetCrewId: moveTargets[member.id] }, `${member.studentName} 학생을 선택한 크루로 이동할까요?`)}>크루 이동</button></div></article>)}{!visibleMemberships.length && <p className="empty-result">해당 학생이 없습니다.</p>}</div>}
+  </section>
 }
 
 function RecordsTable({ rows, loading, compact = false }: { rows: AttendanceExportRow[]; loading: boolean; compact?: boolean }) {

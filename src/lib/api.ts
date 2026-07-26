@@ -11,6 +11,7 @@ import type {
   Announcement,
   CustomField,
   FeedbackItem,
+  AdminWorkspaceData,
 } from '../types'
 import { demoCards, demoExecutive, demoRows, demoSnapshot, demoSummary } from './mock'
 
@@ -116,11 +117,14 @@ export const api = {
     return isDemoMode ? { summary: demoSummary, rows: demoRows } : invoke('dashboard', filters)
   },
 
-  async adminWorkspace(): Promise<{ announcements: Announcement[]; customFields: CustomField[]; feedback: FeedbackItem[] }> {
+  async adminWorkspace(): Promise<AdminWorkspaceData> {
     if (isDemoMode) return {
       announcements: demoSnapshot().announcements,
       customFields: demoSnapshot().customFields,
       feedback: [{ id: 'feedback-1', actorName: '김은혜', actorRole: 'teacher', category: '개선 의견', message: '학생 검색 기능이 있으면 좋겠습니다.', page: '출석체크', status: 'new', createdAt: new Date().toISOString() }],
+      crews: [{ id: 'crew-1', name: '이창현 크루', operatingYear: new Date().getFullYear(), active: true, teacherId: 'teacher-1', teacherName: '이창현' }],
+      users: [{ id: 'teacher-1', name: '이창현', role: 'teacher', active: true }, { id: 'executive-1', name: '임원 관리자', role: 'executive', active: true }],
+      memberships: demoSnapshot().members.map((member) => ({ id: member.membershipId, studentId: member.studentId, studentName: member.name, crewId: 'crew-1', crewName: '이창현 크루', status: member.membershipStatus })),
     }
     return invoke('admin-workspace')
   },

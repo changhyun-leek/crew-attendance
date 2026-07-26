@@ -64,6 +64,40 @@ export interface FeedbackItem {
   createdAt: string
 }
 
+export interface AdminCrew {
+  id: string
+  name: string
+  operatingYear: number
+  active: boolean
+  teacherId?: string
+  teacherName?: string
+}
+
+export interface AdminUser {
+  id: string
+  name: string
+  role: 'teacher' | 'executive'
+  active: boolean
+}
+
+export interface AdminMembership {
+  id: string
+  studentId: string
+  studentName: string
+  crewId: string
+  crewName: string
+  status: MembershipStatus
+}
+
+export interface AdminWorkspaceData {
+  announcements: Announcement[]
+  customFields: CustomField[]
+  feedback: FeedbackItem[]
+  crews: AdminCrew[]
+  users: AdminUser[]
+  memberships: AdminMembership[]
+}
+
 export interface AttendanceSnapshot {
   sessionId: string
   crewId: string

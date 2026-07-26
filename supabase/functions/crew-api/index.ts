@@ -468,23 +468,84 @@ async function manageCrew(req: Request, body: Json) {
 
 async function manageStudent(req: Request, body: Json) {
   await requireExecutive(req)
-  if (body.operation !== 'create') throw new Error('지원하지 않는 작업입니다.')
-  return addStudent(req, body)
+  if (body.operation === 'create') return addStudent(req, body)
+  const membershipId = String(body.membershipId ?? '')
+  const { data: membership, error } = await admin.from('crew_memberships').select('id,student_id,crew_id,status').eq('id', membershipId).single()
+  if (error) throw error
+  if (body.operation === 'status') {
+    const status = String(body.status)
+    if (!['active', 'long_absence', 'left'].includes(status)) throw new Error('학생 상태가 올바르지 않습니다.')
+    const { error: updateError } = await admin.from('crew_memberships').update({
+      status,
+      status_changed_on: kstDate(),
+      ended_on: status === 'left' ? kstDate() : null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', membership.id)
+    if (updateError) throw updateError
+    return { ok: true }
+  }
+  if (body.operation === 'move') {
+    const targetCrewId = String(body.targetCrewId ?? '')
+    if (!targetCrewId || targetCrewId === membership.crew_id) throw new Error('이동할 다른 크루를 선택해주세요.')
+    const { data: maxSort } = await admin.from('crew_memberships').select('sort_order').eq('crew_id', targetCrewId).order('sort_order', { ascending: false }).limit(1).maybeSingle()
+    const { error: endError } = await admin.from('crew_memberships').update({ status: 'left', status_changed_on: kstDate(), ended_on: kstDate(), updated_at: new Date().toISOString() }).eq('id', membership.id)
+    if (endError) throw endError
+    const { error: insertError } = await admin.from('crew_memberships').insert({ student_id: membership.student_id, crew_id: targetCrewId, sort_order: Number(maxSort?.sort_order ?? -1) + 1 })
+    if (insertError) throw insertError
+    return { ok: true }
+  }
+  throw new Error('지원하지 않는 작업입니다.')
 }
 
 async function adminWorkspace(req: Request) {
   await requireExecutive(req)
-  const [{ data: announcements, error: announcementError }, { data: fields, error: fieldError }, { data: feedback, error: feedbackError }] = await Promise.all([
+  const [
+    { data: announcements, error: announcementError },
+    { data: fields, error: fieldError },
+    { data: feedback, error: feedbackError },
+    { data: crews, error: crewError },
+    { data: assignments, error: assignmentError },
+    { data: profiles, error: profileError },
+    { data: memberships, error: membershipError },
+  ] = await Promise.all([
     admin.from('announcements').select('id,title,body,crew_id,active_from,active_until').eq('active', true).order('created_at', { ascending: false }),
     admin.from('custom_fields').select('id,title,description,field_type,options,required,crew_id,active_from,active_until').eq('active', true).order('created_at', { ascending: false }),
     admin.from('feedback_items').select('id,actor_name,actor_role,category,message,page,status,created_at').order('created_at', { ascending: false }).limit(200),
+    admin.from('crews').select('id,name,operating_year,active').order('active', { ascending: false }).order('name'),
+    admin.from('crew_assignments').select('crew_id,profile_id,ends_on,profiles(display_name)').is('ends_on', null),
+    admin.from('profiles').select('id,display_name,role,active').order('role').order('display_name'),
+    admin.from('crew_memberships').select('id,crew_id,status,students(id,display_name),crews(name)').neq('status', 'left').order('sort_order'),
   ])
-  if (announcementError || fieldError || feedbackError) throw announcementError ?? fieldError ?? feedbackError
+  if (announcementError || fieldError || feedbackError || crewError || assignmentError || profileError || membershipError) {
+    throw announcementError ?? fieldError ?? feedbackError ?? crewError ?? assignmentError ?? profileError ?? membershipError
+  }
+  const assignmentMap = new Map((assignments ?? []).map((item: any) => [item.crew_id, item]))
   return {
     announcements: (announcements ?? []).map((item: any) => ({ id: item.id, title: item.title, body: item.body, crewId: item.crew_id ?? undefined, activeFrom: item.active_from, activeUntil: item.active_until })),
     customFields: (fields ?? []).map((item: any) => ({ id: item.id, title: item.title, description: item.description, fieldType: item.field_type, options: Array.isArray(item.options) ? item.options : [], required: item.required, crewId: item.crew_id ?? undefined, activeFrom: item.active_from, activeUntil: item.active_until })),
     feedback: (feedback ?? []).map((item: any) => ({ id: item.id, actorName: item.actor_name, actorRole: item.actor_role, category: item.category, message: item.message, page: item.page, status: item.status, createdAt: item.created_at })),
+    crews: (crews ?? []).map((item: any) => ({
+      id: item.id,
+      name: item.name,
+      operatingYear: item.operating_year,
+      active: item.active,
+      teacherId: assignmentMap.get(item.id)?.profile_id,
+      teacherName: assignmentMap.get(item.id)?.profiles?.display_name,
+    })),
+    users: (profiles ?? []).map((item: any) => ({ id: item.id, name: item.display_name, role: item.role, active: item.active })),
+    memberships: (memberships ?? []).map((item: any) => ({ id: item.id, studentId: item.students.id, studentName: item.students.display_name, crewId: item.crew_id, crewName: item.crews.name, status: item.status })),
   }
+}
+
+async function manageUser(req: Request, body: Json) {
+  const executive = await requireExecutive(req)
+  if (body.operation !== 'set-active') throw new Error('지원하지 않는 작업입니다.')
+  const profileId = String(body.profileId ?? '')
+  const active = body.active === true
+  if (profileId === executive.id && !active) throw new Error('현재 로그인한 임원 계정은 비활성화할 수 없습니다.')
+  const { error } = await admin.from('profiles').update({ active, updated_at: new Date().toISOString() }).eq('id', profileId)
+  if (error) throw error
+  return { ok: true }
 }
 
 function validDate(value: unknown): value is string { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) }
@@ -568,6 +629,7 @@ async function handleRequest(req: Request) {
       'admin-reset-pin': () => resetPin(req, body),
       'admin-manage-crew': () => manageCrew(req, body),
       'admin-manage-student': () => manageStudent(req, body),
+      'admin-manage-user': () => manageUser(req, body),
       'bootstrap-executive': () => createUser(req, body, true),
     }
     if (!handlers[action]) return fail(req, '지원하지 않는 요청입니다.', 404)

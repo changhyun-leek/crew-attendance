@@ -247,6 +247,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .table-status.absent { background: var(--red-soft); color: #a61e1e; }
 .table-status.unchecked { background: #eceaf0; color: #55505d; }
 .management-page { display: grid; grid-template-columns: 1fr minmax(320px, 470px); gap: 18px; align-items: start; }
+.management-stack { display: grid; gap: 18px; }
 .management-intro, .admin-form, .management-help { padding: 22px; border: 1px solid var(--border); border-radius: 16px; background: #fff; }
 .management-intro h2 { margin-bottom: 8px; }
 .management-intro p, .management-help p { color: var(--muted); line-height: 1.65; }
@@ -256,6 +257,21 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .management-help svg { flex: 0 0 24px; color: var(--primary); }
 .management-help strong { display: block; margin-bottom: 5px; }
 .management-help p { margin: 0; }
+.management-list { padding: 22px; border: 1px solid var(--border); border-radius: 16px; background: #fff; }
+.management-list > h2, .management-list-header h2 { margin: 0; font-size: 20px; }
+.management-list-header { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-bottom: 10px; }
+.management-list-header input { max-width: 260px; }
+.management-list article { display: flex; justify-content: space-between; gap: 18px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.management-list article:last-of-type { border-bottom: 0; }
+.management-list article.inactive { opacity: .65; }
+.management-list article > div:first-child { min-width: 180px; }
+.management-list article strong, .management-list article small { display: block; }
+.management-list article small { margin-top: 5px; color: var(--muted); }
+.management-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.management-actions select, .management-actions input { width: auto; min-width: 150px; }
+.management-actions button { min-height: 44px; padding: 0 14px; border: 1px solid var(--border); border-radius: 10px; background: #fff; font-weight: 800; }
+.management-actions button:hover { border-color: var(--primary); color: var(--primary); }
+.management-actions .danger-button { border-color: #fecaca; color: #b91c1c; background: #fff7f7; }
 .workspace-grid { display: grid; grid-template-columns: minmax(380px, .9fr) minmax(380px, 1.1fr); gap: 18px; align-items: start; }
 .workspace-form { grid-row: auto; }
 .workspace-form h2 { margin: 0 0 8px; }
@@ -309,6 +325,9 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .export-buttons button svg { width: 19px; }
   .export-buttons button:last-child { font-size: 0; }
   .management-page { grid-template-columns: 1fr; }
+  .management-list article, .management-list-header { align-items: stretch; flex-direction: column; }
+  .management-actions { justify-content: stretch; }
+  .management-actions select, .management-actions input, .management-actions button { width: 100%; }
   .workspace-grid { grid-template-columns: 1fr; }
   .admin-form { grid-row: auto; }
 }
