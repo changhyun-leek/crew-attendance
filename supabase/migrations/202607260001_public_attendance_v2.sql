@@ -60,7 +60,10 @@ create table if not exists public.students (
   id uuid primary key default gen_random_uuid(),
   display_name text not null check (char_length(trim(display_name)) between 1 and 30),
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  special_note text not null default '',
+  note_updated_at timestamptz,
+  note_updated_by uuid references public.profiles(id) on delete set null
 );
 
 create table if not exists public.crew_memberships (
@@ -111,6 +114,8 @@ create table if not exists public.attendance_records (
   actor_profile_id uuid references public.profiles(id) on delete set null,
   assistant_session_id uuid references public.assistant_sessions(id) on delete set null,
   marked_at timestamptz,
+  absence_reason text not null default '',
+  contact_status text not null default 'not_contacted' check (contact_status in ('not_contacted', 'no_answer', 'contacted', 'other')),
   updated_at timestamptz not null default now(),
   unique(session_id, membership_id)
 );
@@ -132,6 +137,66 @@ create table if not exists public.attendance_events (
   created_at timestamptz not null default now()
 );
 create index if not exists attendance_events_session_idx on public.attendance_events(session_id, created_at desc);
+
+create table if not exists public.announcements (
+  id uuid primary key default gen_random_uuid(),
+  title text not null check (char_length(trim(title)) between 1 and 100),
+  body text not null default '',
+  crew_id uuid references public.crews(id) on delete cascade,
+  active_from date not null,
+  active_until date not null,
+  active boolean not null default true,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  check (active_until >= active_from)
+);
+create index if not exists announcements_active_idx on public.announcements(active, active_from, active_until, crew_id);
+
+create table if not exists public.custom_fields (
+  id uuid primary key default gen_random_uuid(),
+  title text not null check (char_length(trim(title)) between 1 and 100),
+  description text not null default '',
+  field_type text not null default 'select' check (field_type in ('select', 'text', 'boolean')),
+  options jsonb not null default '[]'::jsonb,
+  required boolean not null default false,
+  crew_id uuid references public.crews(id) on delete cascade,
+  active_from date not null,
+  active_until date not null,
+  active boolean not null default true,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  check (active_until >= active_from)
+);
+create index if not exists custom_fields_active_idx on public.custom_fields(active, active_from, active_until, crew_id);
+
+create table if not exists public.custom_field_responses (
+  id uuid primary key default gen_random_uuid(),
+  field_id uuid not null references public.custom_fields(id) on delete cascade,
+  membership_id uuid not null references public.crew_memberships(id) on delete cascade,
+  value_text text not null default '',
+  actor_type public.actor_type not null,
+  actor_profile_id uuid references public.profiles(id) on delete set null,
+  assistant_session_id uuid references public.assistant_sessions(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  unique(field_id, membership_id)
+);
+
+create table if not exists public.feedback_items (
+  id uuid primary key default gen_random_uuid(),
+  actor_name text not null,
+  actor_role text not null check (actor_role in ('teacher', 'executive', 'assistant')),
+  actor_profile_id uuid references public.profiles(id) on delete set null,
+  assistant_session_id uuid references public.assistant_sessions(id) on delete set null,
+  crew_id uuid references public.crews(id) on delete set null,
+  page text not null default '',
+  category text not null default '개선 의견',
+  message text not null check (char_length(trim(message)) between 5 and 1000),
+  status text not null default 'new' check (status in ('new', 'reviewing', 'done')),
+  resolution_note text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists feedback_status_idx on public.feedback_items(status, created_at desc);
 
 create or replace function public.is_executive()
 returns boolean language sql stable security definer set search_path = public
@@ -177,6 +242,10 @@ alter table public.attendance_sessions enable row level security;
 alter table public.attendance_records enable row level security;
 alter table public.assistant_sessions enable row level security;
 alter table public.attendance_events enable row level security;
+alter table public.announcements enable row level security;
+alter table public.custom_fields enable row level security;
+alter table public.custom_field_responses enable row level security;
+alter table public.feedback_items enable row level security;
 
 drop policy if exists profiles_self_or_executive on public.profiles;
 create policy profiles_self_or_executive on public.profiles for select to authenticated
@@ -202,9 +271,22 @@ using (exists(select 1 from public.attendance_sessions s where s.id = session_id
 drop policy if exists events_assigned_or_executive on public.attendance_events;
 create policy events_assigned_or_executive on public.attendance_events for select to authenticated
 using (exists(select 1 from public.attendance_sessions s where s.id = session_id and public.can_access_crew(s.crew_id)));
+drop policy if exists announcements_assigned_or_executive on public.announcements;
+create policy announcements_assigned_or_executive on public.announcements for select to authenticated
+using (crew_id is null or public.can_access_crew(crew_id));
+drop policy if exists custom_fields_assigned_or_executive on public.custom_fields;
+create policy custom_fields_assigned_or_executive on public.custom_fields for select to authenticated
+using (crew_id is null or public.can_access_crew(crew_id));
+drop policy if exists custom_responses_assigned_or_executive on public.custom_field_responses;
+create policy custom_responses_assigned_or_executive on public.custom_field_responses for select to authenticated
+using (exists(select 1 from public.crew_memberships m where m.id = membership_id and public.can_access_crew(m.crew_id)));
+drop policy if exists feedback_executive_only on public.feedback_items;
+create policy feedback_executive_only on public.feedback_items for select to authenticated using (public.is_executive());
 
 revoke all on public.teacher_credentials from anon, authenticated;
 revoke all on public.assistant_sessions from anon, authenticated;
+revoke all on public.feedback_items from anon;
+revoke insert, update, delete on public.announcements, public.custom_fields, public.custom_field_responses, public.feedback_items from authenticated;
 revoke execute on function public.ensure_attendance_session(uuid, date) from public, anon, authenticated;
 grant execute on function public.ensure_attendance_session(uuid, date) to service_role;
 

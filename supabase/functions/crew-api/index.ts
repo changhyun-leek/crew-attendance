@@ -94,11 +94,24 @@ async function buildAttendance(sessionId: string, actor: { type: string; name: s
   const { data: session, error: sessionError } = await admin.from('attendance_sessions').select('id,crew_id,attendance_date,crews(name)').eq('id', sessionId).single()
   if (sessionError) throw sessionError
   const { data: records, error } = await admin.from('attendance_records').select(`
-    id,status,membership_id,updated_at,actor_type,
-    crew_memberships!inner(id,status,sort_order,students!inner(id,display_name)),
+    id,status,membership_id,updated_at,actor_type,absence_reason,contact_status,
+    crew_memberships!inner(id,status,sort_order,students!inner(id,display_name,special_note)),
     profiles(display_name),assistant_sessions(display_name)
   `).eq('session_id', sessionId)
   if (error) throw error
+  const membershipIds = (records ?? []).map((record: any) => record.membership_id)
+  const date = session.attendance_date
+  const { data: announcements } = await admin.from('announcements').select('id,title,body,crew_id,active_from,active_until').eq('active', true).lte('active_from', date).gte('active_until', date).or(`crew_id.is.null,crew_id.eq.${session.crew_id}`).order('created_at', { ascending: false })
+  const { data: fields } = await admin.from('custom_fields').select('id,title,description,field_type,options,required,crew_id,active_from,active_until').eq('active', true).lte('active_from', date).gte('active_until', date).or(`crew_id.is.null,crew_id.eq.${session.crew_id}`).order('created_at')
+  const fieldIds = (fields ?? []).map((field: any) => field.id)
+  let responses: any[] = []
+  if (fieldIds.length && membershipIds.length) {
+    const { data: responseRows, error: responseError } = await admin.from('custom_field_responses').select('field_id,membership_id,value_text').in('field_id', fieldIds).in('membership_id', membershipIds)
+    if (responseError) throw responseError
+    responses = responseRows ?? []
+  }
+  const responseMap = new Map<string, Record<string, string>>()
+  for (const response of responses) responseMap.set(response.membership_id, { ...(responseMap.get(response.membership_id) ?? {}), [response.field_id]: response.value_text })
   const members = (records ?? []).map((record: any) => ({
     membershipId: record.membership_id,
     studentId: record.crew_memberships.students.id,
@@ -111,6 +124,10 @@ async function buildAttendance(sessionId: string, actor: { type: string; name: s
       name: record.profiles?.display_name ?? record.assistant_sessions?.display_name ?? (record.actor_type === 'legacy_import' ? '기존 시스템 이관' : ''),
     } : undefined,
     updatedAt: record.updated_at,
+    absenceReason: record.absence_reason ?? '',
+    contactStatus: record.contact_status ?? 'not_contacted',
+    specialNote: record.crew_memberships.students.special_note ?? '',
+    customResponses: responseMap.get(record.membership_id) ?? {},
   })).sort((a: any, b: any) => a.sortOrder - b.sortOrder)
   return {
     sessionId: session.id,
@@ -119,6 +136,8 @@ async function buildAttendance(sessionId: string, actor: { type: string; name: s
     attendanceDate: session.attendance_date,
     actor,
     members,
+    announcements: (announcements ?? []).map((item: any) => ({ id: item.id, title: item.title, body: item.body, crewId: item.crew_id ?? undefined, activeFrom: item.active_from, activeUntil: item.active_until })),
+    customFields: (fields ?? []).map((item: any) => ({ id: item.id, title: item.title, description: item.description, fieldType: item.field_type, options: Array.isArray(item.options) ? item.options : [], required: item.required, crewId: item.crew_id ?? undefined, activeFrom: item.active_from, activeUntil: item.active_until })),
     ...(token ? { token } : {}),
   }
 }
@@ -280,6 +299,53 @@ async function assistantMark(body: Json) {
   return { ok: true }
 }
 
+async function updateAttendanceDetails(req: Request, body: Json, assistantMode = false) {
+  const sessionId = String(body.sessionId ?? '')
+  const membershipId = String(body.membershipId ?? '')
+  const contactStatus = String(body.contactStatus ?? 'not_contacted')
+  if (!['not_contacted', 'no_answer', 'contacted', 'other'].includes(contactStatus)) throw new Error('연락 상태가 올바르지 않습니다.')
+  const absenceReason = String(body.absenceReason ?? '').trim().slice(0, 500)
+  const { data: session, error: sessionError } = await admin.from('attendance_sessions').select('id,crew_id,attendance_date').eq('id', sessionId).single()
+  if (sessionError || !session) throw new Error('출석 세션을 찾을 수 없습니다.')
+  const { data: membership, error: membershipError } = await admin.from('crew_memberships').select('id,crew_id,student_id').eq('id', membershipId).single()
+  if (membershipError || !membership || membership.crew_id !== session.crew_id) throw new Error('이 크루의 학생이 아닙니다.')
+
+  let actorType: 'teacher' | 'executive' | 'assistant'
+  let actorName: string
+  let actorProfileId: string | undefined
+  let assistantSessionId: string | undefined
+  if (assistantMode) {
+    const assistant = await assistantFromToken(body.token)
+    if (assistant.attendance_session_id !== sessionId) throw new Error('다른 출석일은 변경할 수 없습니다.')
+    actorType = 'assistant'; actorName = assistant.display_name; assistantSessionId = assistant.id
+  } else {
+    const profile = await currentProfile(req)
+    await assertCrewAccess(profile, session.crew_id)
+    actorType = profile.role; actorName = profile.display_name; actorProfileId = profile.id
+    if (typeof body.specialNote === 'string') {
+      await admin.from('students').update({ special_note: body.specialNote.trim().slice(0, 1000), note_updated_at: new Date().toISOString(), note_updated_by: profile.id, updated_at: new Date().toISOString() }).eq('id', membership.student_id)
+    }
+  }
+
+  const { data: record, error: recordError } = await admin.from('attendance_records').update({ absence_reason: absenceReason, contact_status: contactStatus, actor_type: actorType, actor_profile_id: actorProfileId ?? null, assistant_session_id: assistantSessionId ?? null, updated_at: new Date().toISOString() }).eq('session_id', sessionId).eq('membership_id', membershipId).select('id').single()
+  if (recordError) throw recordError
+
+  const rawResponses = body.customResponses && typeof body.customResponses === 'object' ? body.customResponses as Record<string, unknown> : {}
+  const responseIds = Object.keys(rawResponses)
+  if (responseIds.length) {
+    const { data: allowedFields, error: fieldError } = await admin.from('custom_fields').select('id').in('id', responseIds).eq('active', true).lte('active_from', session.attendance_date).gte('active_until', session.attendance_date).or(`crew_id.is.null,crew_id.eq.${session.crew_id}`)
+    if (fieldError) throw fieldError
+    const allowed = new Set((allowedFields ?? []).map((field: any) => field.id))
+    const values = responseIds.filter((id) => allowed.has(id)).map((fieldId) => ({ field_id: fieldId, membership_id: membershipId, value_text: String(rawResponses[fieldId] ?? '').trim().slice(0, 500), actor_type: actorType, actor_profile_id: actorProfileId ?? null, assistant_session_id: assistantSessionId ?? null, updated_at: new Date().toISOString() }))
+    if (values.length) {
+      const { error } = await admin.from('custom_field_responses').upsert(values, { onConflict: 'field_id,membership_id' })
+      if (error) throw error
+    }
+  }
+  await admin.from('attendance_events').insert({ session_id: sessionId, record_id: record.id, membership_id: membershipId, event_type: 'details_updated', actor_type: actorType, actor_profile_id: actorProfileId ?? null, assistant_session_id: assistantSessionId ?? null, actor_name_snapshot: actorName, metadata: { absence_reason: absenceReason, contact_status: contactStatus, custom_field_ids: responseIds } })
+  return buildAttendance(sessionId, { type: actorType, name: actorName })
+}
+
 async function addStudent(req: Request, body: Json) {
   const profile = await currentProfile(req)
   const crewId = String(body.crewId ?? '')
@@ -316,8 +382,8 @@ async function dashboard(req: Request, body: Json) {
   const sessionIds = [...sessionMap.keys()]
   if (!sessionIds.length) return { summary: { totalCrews: 0, totalStudents: 0, present: 0, absent: 0, unchecked: 0, attendanceRate: 0 }, rows: [] }
   const { data: records, error } = await admin.from('attendance_records').select(`
-    session_id,status,actor_type,marked_at,updated_at,
-    crew_memberships!inner(status,students!inner(display_name)),
+    session_id,status,actor_type,marked_at,updated_at,absence_reason,contact_status,
+    crew_memberships!inner(status,students!inner(display_name,special_note)),
     profiles(display_name),assistant_sessions(display_name)
   `).in('session_id', sessionIds)
   if (error) throw error
@@ -333,12 +399,17 @@ async function dashboard(req: Request, body: Json) {
       actorName: record.profiles?.display_name ?? record.assistant_sessions?.display_name ?? (record.actor_type === 'legacy_import' ? '기존 시스템 이관' : ''),
       markedAt: record.marked_at ?? '',
       updatedAt: record.updated_at,
+      absenceReason: record.absence_reason ?? '',
+      contactStatus: record.contact_status ?? 'not_contacted',
+      specialNote: record.crew_memberships.students.special_note ?? '',
+      hasImportantNote: Boolean(record.absence_reason || record.crew_memberships.students.special_note || record.contact_status === 'no_answer'),
     }
   })
   if (body.crew) rows = rows.filter((row: any) => row.crewName.includes(String(body.crew)))
   if (body.student) rows = rows.filter((row: any) => row.studentName.includes(String(body.student)))
   if (body.status) rows = rows.filter((row: any) => row.attendanceStatus === body.status)
   if (body.actor) rows = rows.filter((row: any) => row.actorName.includes(String(body.actor)))
+  if (body.notes === 'yes') rows = rows.filter((row: any) => row.hasImportantNote)
   const present = rows.filter((row: any) => row.attendanceStatus === 'present').length
   const absent = rows.filter((row: any) => row.attendanceStatus === 'absent').length
   const unchecked = rows.filter((row: any) => row.attendanceStatus === 'unchecked').length
@@ -401,6 +472,73 @@ async function manageStudent(req: Request, body: Json) {
   return addStudent(req, body)
 }
 
+async function adminWorkspace(req: Request) {
+  await requireExecutive(req)
+  const [{ data: announcements, error: announcementError }, { data: fields, error: fieldError }, { data: feedback, error: feedbackError }] = await Promise.all([
+    admin.from('announcements').select('id,title,body,crew_id,active_from,active_until').eq('active', true).order('created_at', { ascending: false }),
+    admin.from('custom_fields').select('id,title,description,field_type,options,required,crew_id,active_from,active_until').eq('active', true).order('created_at', { ascending: false }),
+    admin.from('feedback_items').select('id,actor_name,actor_role,category,message,page,status,created_at').order('created_at', { ascending: false }).limit(200),
+  ])
+  if (announcementError || fieldError || feedbackError) throw announcementError ?? fieldError ?? feedbackError
+  return {
+    announcements: (announcements ?? []).map((item: any) => ({ id: item.id, title: item.title, body: item.body, crewId: item.crew_id ?? undefined, activeFrom: item.active_from, activeUntil: item.active_until })),
+    customFields: (fields ?? []).map((item: any) => ({ id: item.id, title: item.title, description: item.description, fieldType: item.field_type, options: Array.isArray(item.options) ? item.options : [], required: item.required, crewId: item.crew_id ?? undefined, activeFrom: item.active_from, activeUntil: item.active_until })),
+    feedback: (feedback ?? []).map((item: any) => ({ id: item.id, actorName: item.actor_name, actorRole: item.actor_role, category: item.category, message: item.message, page: item.page, status: item.status, createdAt: item.created_at })),
+  }
+}
+
+function validDate(value: unknown): value is string { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) }
+
+async function createAnnouncement(req: Request, body: Json) {
+  const profile = await requireExecutive(req)
+  const title = String(body.title ?? '').trim().slice(0, 100)
+  if (!title || !validDate(body.activeFrom) || !validDate(body.activeUntil) || body.activeUntil < body.activeFrom) throw new Error('공지 제목과 게시 기간을 확인해주세요.')
+  const { error } = await admin.from('announcements').insert({ title, body: String(body.body ?? '').trim().slice(0, 1000), crew_id: body.crewId || null, active_from: body.activeFrom, active_until: body.activeUntil, created_by: profile.id })
+  if (error) throw error
+  return { ok: true }
+}
+
+async function createCustomField(req: Request, body: Json) {
+  const profile = await requireExecutive(req)
+  const title = String(body.title ?? '').trim().slice(0, 100)
+  const options = Array.isArray(body.options) ? body.options.map((value) => String(value).trim().slice(0, 50)).filter(Boolean).slice(0, 20) : []
+  if (!title || options.length < 2 || !validDate(body.activeFrom) || !validDate(body.activeUntil) || body.activeUntil < body.activeFrom) throw new Error('임시 항목의 제목, 선택지 2개 이상, 기간을 확인해주세요.')
+  const { error } = await admin.from('custom_fields').insert({ title, description: String(body.body ?? '').trim().slice(0, 500), field_type: 'select', options, required: Boolean(body.required), crew_id: body.crewId || null, active_from: body.activeFrom, active_until: body.activeUntil, created_by: profile.id })
+  if (error) throw error
+  return { ok: true }
+}
+
+async function submitFeedback(req: Request, body: Json) {
+  let actorName: string
+  let actorRole: 'teacher' | 'executive' | 'assistant'
+  let actorProfileId: string | null = null
+  let assistantSessionId: string | null = null
+  let crewId: string | null = null
+  if (typeof body.token === 'string' && body.token) {
+    const assistant = await assistantFromToken(body.token)
+    actorName = assistant.display_name; actorRole = 'assistant'; assistantSessionId = assistant.id; crewId = assistant.crew_id
+  } else {
+    const profile = await currentProfile(req)
+    actorName = profile.display_name; actorRole = profile.role; actorProfileId = profile.id
+    const assignment: any = profile.role === 'teacher' ? await activeAssignment(profile.id) : null
+    crewId = assignment?.crew_id ?? null
+  }
+  const message = String(body.message ?? '').trim().slice(0, 1000)
+  if (message.length < 5) throw new Error('의견 내용을 5자 이상 입력해주세요.')
+  const { error } = await admin.from('feedback_items').insert({ actor_name: actorName, actor_role: actorRole, actor_profile_id: actorProfileId, assistant_session_id: assistantSessionId, crew_id: crewId, page: String(body.page ?? '').slice(0, 80), category: String(body.category ?? '개선 의견').slice(0, 50), message })
+  if (error) throw error
+  return { ok: true }
+}
+
+async function updateFeedback(req: Request, body: Json) {
+  await requireExecutive(req)
+  const status = String(body.status)
+  if (!['new', 'reviewing', 'done'].includes(status)) throw new Error('처리 상태가 올바르지 않습니다.')
+  const { error } = await admin.from('feedback_items').update({ status, updated_at: new Date().toISOString() }).eq('id', String(body.id ?? ''))
+  if (error) throw error
+  return { ok: true }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors(req.headers.get('origin')) })
   if (req.method !== 'POST') return fail(req, 'POST 요청만 지원합니다.', 405)
@@ -416,9 +554,16 @@ Deno.serve(async (req) => {
       'assistant-start': () => assistantStart(body),
       'assistant-correct-name': () => correctAssistantName(body),
       'assistant-mark-attendance': () => assistantMark(body),
+      'update-attendance-details': () => updateAttendanceDetails(req, body),
+      'assistant-update-attendance-details': () => updateAttendanceDetails(req, body, true),
       'add-student': () => addStudent(req, body),
       'set-membership-status': () => setMembershipStatus(req, body),
       'dashboard': () => dashboard(req, body),
+      'admin-workspace': () => adminWorkspace(req),
+      'submit-feedback': () => submitFeedback(req, body),
+      'admin-update-feedback': () => updateFeedback(req, body),
+      'admin-create-announcement': () => createAnnouncement(req, body),
+      'admin-create-custom-field': () => createCustomField(req, body),
       'admin-create-user': () => createUser(req, body),
       'admin-reset-pin': () => resetPin(req, body),
       'admin-manage-crew': () => manageCrew(req, body),

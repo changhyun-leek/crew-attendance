@@ -29,7 +29,7 @@ export function demoSnapshot(actorName = '이창현', actorType: 'teacher' | 'as
       absenceReason: index === 2 ? '감기 증상으로 가정에서 쉬는 중' : '',
       contactStatus: index === 2 ? 'contacted' : 'not_contacted',
       specialNote: index === 1 ? '장학금 신청 관련 서류 확인 필요' : '',
-      customResponses: index === 0 ? { 'field-retreat': '신청' } : {},
+      customResponses: (index === 0 ? { 'field-retreat': '신청' } : {}) as Record<string, string>,
     })),
     announcements: [{ id: 'notice-1', title: '이번 주 확인사항', body: '수련회 참석 여부를 학생별로 입력해주세요.', activeFrom: lastSunday(), activeUntil: '2026-12-31' }],
     customFields: [{ id: 'field-retreat', title: '수련회 참석', description: '학생과 확인 후 선택해주세요.', fieldType: 'select', options: ['신청', '미신청', '고려중'], required: true, activeFrom: lastSunday(), activeUntil: '2026-12-31' }],

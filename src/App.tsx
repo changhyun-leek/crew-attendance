@@ -79,7 +79,7 @@ function App() {
       setAssistantMode(true)
       setSnapshot(nextSnapshot)
       setScreen('attendance')
-    }} /><FeedbackButton onClick={() => setFeedbackOpen(true)} />{feedbackOpen && <FeedbackDialog actorName="사이트 방문자" actorRole="assistant" page="첫 화면" onClose={() => setFeedbackOpen(false)} />}</>
+    }} /></>
   }
 
   if (screen === 'dashboard' && profile?.role === 'executive') {
@@ -514,7 +514,22 @@ function AdminManagement({ tab, onDone }: { tab: 'crews' | 'teachers' | 'student
 }
 
 function RecordsTable({ rows, loading, compact = false }: { rows: AttendanceExportRow[]; loading: boolean; compact?: boolean }) {
-  return <section className="data-card"><div className="data-card-header"><div><h2>{compact ? '변경 내역' : '출석 상세'}</h2><p>총 {rows.length}건</p></div></div><div className="table-scroll">{loading ? <LoadingBlock label="데이터를 불러오는 중" /> : <table><thead><tr><th>출석일</th><th>크루</th><th>학생명</th><th>학생상태</th><th>출석상태</th><th>체크자</th><th>최종수정</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.attendanceDate}-${row.crewName}-${row.studentName}-${index}`}><td>{row.attendanceDate}</td><td>{row.crewName}</td><td><strong>{row.studentName}</strong></td><td>{membershipLabel(row.membershipStatus)}</td><td><span className={`table-status ${row.attendanceStatus}`}>{attendanceLabel(row.attendanceStatus)}</span></td><td>{row.actorName}<small>{row.actorType}</small></td><td>{row.updatedAt.slice(0, 16).replace('T', ' ')}</td></tr>)}</tbody></table>}</div></section>
+  return <section className="data-card"><div className="data-card-header"><div><h2>{compact ? '변경 내역' : '출석 상세'}</h2><p>총 {rows.length}건 · 노란색 표시는 확인할 비고가 있는 학생입니다.</p></div></div><div className="table-scroll">{loading ? <LoadingBlock label="데이터를 불러오는 중" /> : <table><thead><tr><th>출석일</th><th>크루</th><th>학생명</th><th>학생상태</th><th>출석상태</th><th>결석 사유·연락</th><th>학생 비고</th><th>체크자</th><th>최종수정</th></tr></thead><tbody>{rows.map((row, index) => <tr className={row.hasImportantNote ? 'important-row' : ''} key={`${row.attendanceDate}-${row.crewName}-${row.studentName}-${index}`}><td>{row.attendanceDate}</td><td>{row.crewName}</td><td><strong>{row.studentName}</strong>{row.hasImportantNote && <span className="important-badge">확인 필요</span>}</td><td>{membershipLabel(row.membershipStatus)}</td><td><span className={`table-status ${row.attendanceStatus}`}>{attendanceLabel(row.attendanceStatus)}</span></td><td>{row.absenceReason || contactLabel(row.contactStatus)}</td><td>{row.specialNote || '-'}</td><td>{row.actorName}<small>{row.actorType}</small></td><td>{row.updatedAt.slice(0, 16).replace('T', ' ')}</td></tr>)}</tbody></table>}</div></section>
+}
+
+function FeedbackButton({ onClick }: { onClick: () => void }) { return <button className="feedback-fab" onClick={onClick}><MessageSquare />오류·개선 의견 보내기</button> }
+
+function FeedbackDialog({ actorName, actorRole, page, onClose }: { actorName: string; actorRole: 'teacher' | 'executive' | 'assistant'; page: string; onClose: () => void }) {
+  const [category, setCategory] = useState('오류 신고')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState(false)
+  async function submit(event: FormEvent) {
+    event.preventDefault(); setBusy(true)
+    try { await api.submitFeedback({ actorName, actorRole, category, message: message.trim(), page }); setSent(true) }
+    finally { setBusy(false) }
+  }
+  return <div className="modal-backdrop"><form className="small-dialog feedback-dialog" onSubmit={submit}><button type="button" className="icon-button close-button" onClick={onClose} aria-label="닫기"><X /></button>{sent ? <><Check className="sent-icon" /><h2>의견을 보냈습니다</h2><p>임원 화면의 의견함에 저장되었습니다. 확인 후 처리 상태를 남길 수 있습니다.</p><button type="button" className="primary-button" onClick={onClose}>확인</button></> : <><p className="eyebrow">빠른 피드백</p><h2>오류·개선 의견 보내기</h2><p>어려웠던 점이나 바꾸면 좋을 점을 편하게 적어주세요.</p><label>종류<select value={category} onChange={(event) => setCategory(event.target.value)}><option>오류 신고</option><option>사용이 어려움</option><option>개선 의견</option><option>기타</option></select></label><label>내용<textarea required minLength={5} maxLength={1000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="예: 학생 이름을 찾기가 어려웠습니다." /></label><button className="primary-button" disabled={busy}>{busy ? '보내는 중…' : '임원에게 보내기'}</button></>}</form></div>
 }
 
 function SummaryCard({ label, value, tone = '' }: { label: string; value: string; tone?: string }) { return <article className={`summary-card ${tone}`}><span>{label}</span><strong>{value}</strong></article> }
@@ -522,5 +537,6 @@ function LoadingBlock({ label }: { label: string }) { return <div className="loa
 function ErrorBlock({ message, onRetry }: { message: string; onRetry?: () => void }) { return <div className="error-block" role="alert"><AlertTriangle /><span>{message}</span>{onRetry && <button onClick={onRetry}>다시 시도</button>}</div> }
 function attendanceLabel(value: string) { return value === 'present' ? '출석' : value === 'absent' ? '결석' : '미체크' }
 function membershipLabel(value: string) { return value === 'active' ? '활동' : value === 'long_absence' ? '장기결석' : '퇴실' }
+function contactLabel(value?: ContactStatus) { return value === 'no_answer' ? '연락 안 됨' : value === 'contacted' ? '연락 완료' : value === 'other' ? '기타' : '아직 연락 안 함' }
 
 export default App

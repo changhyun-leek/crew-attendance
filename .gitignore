@@ -7,3 +7,9 @@ legacy-backups/*.json
 legacy-backups/*.csv
 .DS_Store
 .claude/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+vitest.config.js
+vitest.config.d.ts
+docs/rendered/
