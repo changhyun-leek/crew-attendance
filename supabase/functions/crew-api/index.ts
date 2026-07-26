@@ -593,6 +593,10 @@ function rosterNameKey(name: string): string {
   return name.normalize('NFC').replace(/\s+/g, '').replace(/[A-Za-z]$/, '').toLocaleLowerCase('ko-KR')
 }
 
+function crewNameKey(name: string): string {
+  return name.normalize('NFC').replace(/\s+/g, '').toLocaleLowerCase('ko-KR')
+}
+
 async function importRoster(req: Request, body: Json) {
   const executive = await requireExecutive(req)
   const sourceKey = String(body.sourceKey ?? '').trim().slice(0, 100)
@@ -617,17 +621,29 @@ async function importRoster(req: Request, body: Json) {
   let studentsRenamed = 0
   let assignmentsChanged = 0
   const today = kstDate()
+  const { data: existingCrews, error: existingCrewsError } = await admin.from('crews').select('*').eq('operating_year', operatingYear)
+  if (existingCrewsError) throw existingCrewsError
+  const yearCrews = [...(existingCrews ?? [])] as any[]
   for (const rawCrew of crews) {
     const crewName = cleanName(rawCrew?.name)
     const teacherName = cleanName(rawCrew?.teacherName)
     const studentNames = Array.isArray(rawCrew?.students) ? rawCrew.students.map(cleanName).filter(Boolean) : []
     if (!crewName || !studentNames.length) throw new Error('학생이 없는 크루 또는 잘못된 크루명이 포함되어 있습니다.')
-    let { data: crew, error: crewError } = await admin.from('crews').select('*').eq('name', crewName).eq('operating_year', operatingYear).maybeSingle()
-    if (crewError) throw crewError
+    let crew = yearCrews.find((item) => item.name === crewName)
+    if (!crew) {
+      const normalizedMatches = yearCrews.filter((item) => crewNameKey(item.name) === crewNameKey(crewName))
+      if (normalizedMatches.length === 1) {
+        const renamed = await admin.from('crews').update({ name: crewName }).eq('id', normalizedMatches[0].id).select('*').single()
+        if (renamed.error) throw renamed.error
+        crew = renamed.data
+        yearCrews.splice(yearCrews.indexOf(normalizedMatches[0]), 1, crew)
+      }
+    }
     if (!crew) {
       const created = await admin.from('crews').insert({ name: crewName, operating_year: operatingYear, active: true }).select('*').single()
       if (created.error) throw created.error
       crew = created.data
+      yearCrews.push(crew)
       crewsCreated += 1
     } else if (!crew.active) {
       const updated = await admin.from('crews').update({ active: true, ended_at: null }).eq('id', crew.id).select('*').single()
