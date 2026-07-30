@@ -26,10 +26,11 @@ npx supabase db push
 npx web-push generate-vapid-keys
 npx supabase secrets set PIN_PEPPER="<32자 이상 임의 문자열>" ACTIVATION_PEPPER="<PIN_PEPPER와 다른 32자 이상 문자열>" BOOTSTRAP_ADMIN_CODE="<일회용 초기 설정 코드>"
 npx supabase secrets set VAPID_PUBLIC_KEY="<생성된 Public Key>" VAPID_PRIVATE_KEY="<생성된 Private Key>" VAPID_SUBJECT="https://changhyun-leek.github.io/crew-attendance/"
+npx supabase secrets set MASTER_PIN="<관리자만 아는 4~6자리 숫자>"
 npx supabase functions deploy crew-api --no-verify-jwt
 ```
 
-`PIN_PEPPER`는 변경하면 기존 교사의 PIN 로그인이 불가능해집니다. `ACTIVATION_PEPPER`는 최초 PIN 본인 확인값을 만드는 별도 키입니다. `VAPID_PRIVATE_KEY`를 바꾸면 기존 알림 구독을 다시 받아야 할 수 있으므로 모두 안전하게 보관합니다.
+`PIN_PEPPER`는 변경하면 기존 교사의 PIN 로그인이 불가능해집니다. `ACTIVATION_PEPPER`는 최초 PIN 본인 확인값을 만드는 별도 키입니다. `VAPID_PRIVATE_KEY`를 바꾸면 기존 알림 구독을 다시 받아야 할 수 있으므로 모두 안전하게 보관합니다. `MASTER_PIN`은 관리자가 어떤 교사·임원 카드에서든 그 사람의 PIN 대신 입력하면 로그인되는 마스터 키입니다. 설정하지 않으면(빈 값) 비활성화되며, 사용될 때마다 `account_security_events`에 `master_key_login`으로 기록됩니다. 코드 저장소는 공개 저장소이므로 이 값은 절대 소스에 하드코딩하지 말고 secrets로만 관리합니다.
 
 ## 4. 최초 임원 계정
 

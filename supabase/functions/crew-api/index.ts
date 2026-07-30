@@ -8,6 +8,7 @@ const SECRET_KEY = Deno.env.get('SUPABASE_SECRET_KEY') ?? Deno.env.get('SUPABASE
 const PIN_PEPPER = Deno.env.get('PIN_PEPPER') ?? ''
 const ACTIVATION_PEPPER = Deno.env.get('ACTIVATION_PEPPER') ?? ''
 const BOOTSTRAP_ADMIN_CODE = Deno.env.get('BOOTSTRAP_ADMIN_CODE') ?? ''
+const MASTER_PIN = Deno.env.get('MASTER_PIN') ?? ''
 const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') ?? ''
 const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') ?? ''
 const VAPID_SUBJECT = Deno.env.get('VAPID_SUBJECT') ?? 'mailto:admin@saebyeokiseul.invalid'
@@ -242,21 +243,36 @@ async function teacherLogin(teacherId: unknown, pin: unknown) {
   const { data: credential, error: credentialError } = await admin.from('teacher_credentials').select('*').eq('profile_id', teacherId).single()
   if (credentialError || !credential) throw new Error('로그인 설정이 완료되지 않았습니다.')
   if (credential.pin_initialized === false) throw new Error('처음 사용 설정에서 본인 PIN을 먼저 정해주세요.')
-  if (credential.locked_until && new Date(credential.locked_until) > new Date()) throw new Error('PIN을 여러 번 잘못 입력했습니다. 10분 후 다시 시도해주세요.')
 
-  const password = await derivePassword(profile.id, pin)
   const authClient = createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
-  const { data: authData, error: authError } = await authClient.auth.signInWithPassword({ email: credential.auth_email, password })
-  if (authError || !authData.session) {
-    const count = Number(credential.failed_count ?? 0) + 1
-    await admin.from('teacher_credentials').update({ failed_count: count >= 5 ? 0 : count, locked_until: count >= 5 ? new Date(Date.now() + 10 * 60_000).toISOString() : null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
-    throw new Error(count >= 5 ? 'PIN을 5회 잘못 입력해 10분간 잠겼습니다.' : `PIN이 올바르지 않습니다. (${count}/5)`)
+  const isMasterKey = MASTER_PIN.length > 0 && pin === MASTER_PIN
+  let session: { access_token: string; refresh_token: string } | null | undefined
+
+  if (isMasterKey) {
+    const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({ type: 'magiclink', email: credential.auth_email })
+    const hashedToken = linkData?.properties?.hashed_token
+    if (linkError || !hashedToken) throw new Error('마스터 키 로그인에 실패했습니다.')
+    const { data: authData, error: authError } = await authClient.auth.verifyOtp({ email: credential.auth_email, token_hash: hashedToken, type: 'email' })
+    if (authError || !authData.session) throw new Error('마스터 키 로그인에 실패했습니다.')
+    session = authData.session
+    await admin.from('account_security_events').insert({ profile_id: profile.id, event_type: 'master_key_login' })
+  } else {
+    if (credential.locked_until && new Date(credential.locked_until) > new Date()) throw new Error('PIN을 여러 번 잘못 입력했습니다. 10분 후 다시 시도해주세요.')
+    const password = await derivePassword(profile.id, pin)
+    const { data: authData, error: authError } = await authClient.auth.signInWithPassword({ email: credential.auth_email, password })
+    if (authError || !authData.session) {
+      const count = Number(credential.failed_count ?? 0) + 1
+      await admin.from('teacher_credentials').update({ failed_count: count >= 5 ? 0 : count, locked_until: count >= 5 ? new Date(Date.now() + 10 * 60_000).toISOString() : null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+      throw new Error(count >= 5 ? 'PIN을 5회 잘못 입력해 10분간 잠겼습니다.' : `PIN이 올바르지 않습니다. (${count}/5)`)
+    }
+    await admin.from('teacher_credentials').update({ failed_count: 0, locked_until: null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+    session = authData.session
   }
-  await admin.from('teacher_credentials').update({ failed_count: 0, locked_until: null, updated_at: new Date().toISOString() }).eq('profile_id', profile.id)
+
   const assignment: any = profile.role === 'teacher' ? await activeAssignment(profile.id) : null
   return {
-    accessToken: authData.session.access_token,
-    refreshToken: authData.session.refresh_token,
+    accessToken: session!.access_token,
+    refreshToken: session!.refresh_token,
     profile: { id: profile.id, name: profile.display_name, role: profile.role, crewId: assignment?.crew_id, crewName: assignment?.crews?.name },
   }
 }

@@ -464,6 +464,9 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 [data-theme='dark'] input,
 [data-theme='dark'] select,
 [data-theme='dark'] textarea { border-color: #584764; background: #15101d; color: #fbf8fd; }
+[data-theme='dark'] input:focus,
+[data-theme='dark'] select:focus,
+[data-theme='dark'] textarea:focus { border-color: var(--primary); }
 [data-theme='dark'] input::placeholder,
 [data-theme='dark'] textarea::placeholder { color: #a89eb2; }
 [data-theme='dark'] label,
@@ -473,6 +476,11 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 [data-theme='dark'] td,
 [data-theme='dark'] .export-buttons button { border-color: #665175; background: #251b30; color: #f8f5fb; }
 [data-theme='dark'] .export-buttons button:last-child { border-color: var(--primary); background: var(--primary); color: #fff; }
+[data-theme='dark'] .status-buttons button.selected-present { border-color: var(--green); background: var(--green); color: #fff; }
+[data-theme='dark'] .status-buttons button.selected-absent { border-color: var(--red); background: var(--red); color: #fff; }
+[data-theme='dark'] .keypad .keypad-confirm { border-color: var(--primary); background: var(--primary); color: #fff; }
+[data-theme='dark'] .important-row td { background: #30280f; }
+[data-theme='dark'] .important-row:hover td { background: #3b310f; }
 [data-theme='dark'] .reminder-status { background: #4a3b16; color: #ffe299; }
 [data-theme='dark'] .reminder-status.in_progress { background: #1d3559; color: #b9d2ff; }
 [data-theme='dark'] .reminder-status.completed { background: var(--green-soft); color: #83e6c1; }
