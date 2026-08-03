@@ -235,6 +235,21 @@ function PinModal({ card, onClose, onAssistant, onSuccess }: {
     finally { setBusy(false) }
   }
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (busy) return
+      if (event.key >= '0' && event.key <= '9') {
+        setPin((current) => current.length < 6 ? `${current}${event.key}` : current)
+      } else if (event.key === 'Backspace') {
+        setPin((current) => current.slice(0, -1))
+      } else if (event.key === 'Enter') {
+        void submit()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+
   return <div className="modal-backdrop" role="presentation">
     <section className="pin-sheet" role="dialog" aria-modal="true" aria-labelledby="pin-title">
       <button className="icon-button close-button" onClick={onClose} aria-label="닫기"><X /></button>

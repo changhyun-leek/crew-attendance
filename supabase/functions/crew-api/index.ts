@@ -252,7 +252,7 @@ async function teacherLogin(teacherId: unknown, pin: unknown) {
     const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({ type: 'magiclink', email: credential.auth_email })
     const hashedToken = linkData?.properties?.hashed_token
     if (linkError || !hashedToken) throw new Error('마스터 키 로그인에 실패했습니다.')
-    const { data: authData, error: authError } = await authClient.auth.verifyOtp({ email: credential.auth_email, token_hash: hashedToken, type: 'email' })
+    const { data: authData, error: authError } = await authClient.auth.verifyOtp({ token_hash: hashedToken, type: 'email' })
     if (authError || !authData.session) throw new Error('마스터 키 로그인에 실패했습니다.')
     session = authData.session
     await admin.from('account_security_events').insert({ profile_id: profile.id, event_type: 'master_key_login' })

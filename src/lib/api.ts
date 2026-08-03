@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
 import type {
   AttendanceExportRow,
   AttendanceSnapshot,
@@ -28,7 +28,13 @@ export const isDemoMode = new URLSearchParams(window.location.search).get('demo'
 
 async function invoke<T>(action: string, body: Record<string, unknown> = {}): Promise<T> {
   const { data, error } = await supabase.functions.invoke('crew-api', { body: { action, ...body } })
-  if (error) throw new Error(error.message)
+  if (error) {
+    if (error instanceof FunctionsHttpError) {
+      const responseBody = await error.context.json().catch(() => null)
+      throw new Error(responseBody?.error ?? error.message)
+    }
+    throw new Error(error.message)
+  }
   if (data?.error) throw new Error(data.error)
   return data as T
 }
