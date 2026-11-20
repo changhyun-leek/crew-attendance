@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   BarChart3,
@@ -24,14 +24,15 @@ import {
   X,
 } from 'lucide-react'
 import { api, isDemoMode } from './lib/api'
+import { parseStoredNames, toggledAttendanceStatus, updateManyMemberAttendances, updateMemberAttendance } from './lib/attendanceState'
 import { thisWeekSunday } from './lib/date'
 import { buildReportText, downloadText, rowsToCsv } from './lib/export'
-import { downloadRegistryWorkbook } from './lib/registryXlsx'
 import { PwaInstallControl, PwaUpdateNotice } from './PwaInstall'
 import { ThemeControl } from './Theme'
 import { AttendanceReminderPanel, TeacherNotificationControl } from './PushNotifications'
 import type {
   AttendanceExportRow,
+  AttendanceEventRow,
   AttendanceMember,
   AttendanceSnapshot,
   AttendanceStatus,
@@ -89,10 +90,10 @@ function App() {
   }
 
   if (screen === 'dashboard' && profile?.role === 'executive') {
-    return <><PwaInstallControl /><PwaUpdateNotice /><ExecutiveDashboard profile={profile} onLogout={logout} /><FeedbackButton onClick={() => setFeedbackOpen(true)} />{feedbackOpen && <FeedbackDialog actorName={profile.name} actorRole="executive" page="임원 화면" onClose={() => setFeedbackOpen(false)} />}</>
+    return <><PwaUpdateNotice /><ExecutiveDashboard profile={profile} onLogout={logout} /><FeedbackButton onClick={() => setFeedbackOpen(true)} />{feedbackOpen && <FeedbackDialog actorName={profile.name} actorRole="executive" page="임원 화면" onClose={() => setFeedbackOpen(false)} />}</>
   }
 
-  return <><PwaInstallControl /><PwaUpdateNotice /><AttendancePage
+  return <><PwaUpdateNotice /><AttendancePage
     profile={profile}
     initialSnapshot={snapshot}
     assistantMode={assistantMode}
@@ -274,7 +275,7 @@ function AssistantModal({ card, onClose, onSuccess }: {
   onSuccess: (snapshot: AttendanceSnapshot) => void
 }) {
   const storageKey = `assistant-recent-${card.crewId}`
-  const [recent] = useState<string[]>(() => JSON.parse(localStorage.getItem(storageKey) ?? '[]'))
+  const [recent] = useState<string[]>(() => parseStoredNames(localStorage.getItem(storageKey)))
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -326,15 +327,24 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
   const [assistantName, setAssistantName] = useState(initialSnapshot?.actor.name ?? '')
   const [detailMember, setDetailMember] = useState<AttendanceMember | null>(null)
   const [pinChangeOpen, setPinChangeOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [manageBusy, setManageBusy] = useState(false)
+  const loadSequence = useRef(0)
 
   const crewId = initialSnapshot?.crewId ?? profile?.crewId ?? ''
-  const load = async () => {
+  const load = useCallback(async () => {
     if (assistantMode && initialSnapshot) return
+    const sequence = ++loadSequence.current
     setLoading(true); setError('')
-    try { setData(await api.attendance(crewId, date)) }
-    catch { setError('출석 명단을 불러오지 못했습니다.') }
-    finally { setLoading(false) }
-  }
+    try {
+      const nextData = await api.attendance(crewId, date)
+      if (sequence === loadSequence.current) setData(nextData)
+    } catch (reason) {
+      if (sequence === loadSequence.current) setError(reason instanceof Error ? reason.message : '출석 명단을 불러오지 못했습니다.')
+    } finally {
+      if (sequence === loadSequence.current) setLoading(false)
+    }
+  }, [assistantMode, crewId, date, initialSnapshot])
   useEffect(() => { if (crewId) void load() }, [crewId, date])
 
   const active = data?.members.filter((member) => member.membershipStatus === 'active') ?? []
@@ -346,50 +356,76 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
   }), [active])
 
   async function mark(member: AttendanceMember, status: AttendanceStatus) {
-    if (!data || !online) return
-    const next = member.attendanceStatus === status ? 'unchecked' : status
-    setData({ ...data, members: data.members.map((item) => item.membershipId === member.membershipId ? { ...item, attendanceStatus: next, actor: data.actor } : item) })
+    if (!data || !online || bulkBusy || saveState[member.membershipId] === 'saving') return
+    const previous = member.attendanceStatus
+    const next = toggledAttendanceStatus(previous, status)
+    const sessionId = data.sessionId
+    setError('')
+    setData((current) => current ? { ...current, members: updateMemberAttendance(current.members, member.membershipId, next, current.actor) } : current)
     setSaveState((state) => ({ ...state, [member.membershipId]: 'saving' }))
     try {
-      await api.mark(data.sessionId, member.membershipId, next, assistantMode)
+      await api.mark(sessionId, member.membershipId, next, assistantMode)
       setSaveState((state) => ({ ...state, [member.membershipId]: 'saved' }))
-    } catch {
+    } catch (reason) {
+      setData((current) => current ? { ...current, members: updateMemberAttendance(current.members, member.membershipId, previous, member.actor) } : current)
       setSaveState((state) => ({ ...state, [member.membershipId]: 'error' }))
-      await load()
+      setError(reason instanceof Error ? `${member.name}: ${reason.message}` : `${member.name} 학생의 출석을 저장하지 못했습니다.`)
     }
   }
 
   async function markUncheckedAbsent() {
-    if (!data || !confirm(`미체크 ${counts.unchecked}명을 모두 결석 처리할까요?`)) return
-    for (const member of active.filter((item) => item.attendanceStatus === 'unchecked')) await mark(member, 'absent')
+    if (!data || !online || bulkBusy || !confirm(`미체크 ${counts.unchecked}명을 모두 결석 처리할까요?`)) return
+    const targets = active.filter((item) => item.attendanceStatus === 'unchecked')
+    if (!targets.length) return
+    const targetIds = targets.map((member) => member.membershipId)
+    const sessionId = data.sessionId
+    setBulkBusy(true); setError('')
+    setData((current) => current ? { ...current, members: updateManyMemberAttendances(current.members, targetIds, 'absent', current.actor) } : current)
+    setSaveState((state) => ({ ...state, ...Object.fromEntries(targetIds.map((id) => [id, 'saving' as const])) }))
+    const results = await Promise.allSettled(targets.map((member) => api.mark(sessionId, member.membershipId, 'absent', assistantMode)))
+    const failed = results.flatMap((result, index) => result.status === 'rejected' ? [targets[index].membershipId] : [])
+    setSaveState((state) => ({ ...state, ...Object.fromEntries(results.map((result, index) => [targets[index].membershipId, result.status === 'fulfilled' ? 'saved' : 'error'])) }))
+    setBulkBusy(false)
+    if (failed.length) {
+      setError(`${failed.length}명의 출석을 저장하지 못해 서버 상태를 다시 불러왔습니다.`)
+      await load()
+    }
   }
 
   async function copyReport() {
     if (!data) return
-    await navigator.clipboard.writeText(buildReportText(date, data.crewName, data.members))
-    alert('보고 문구를 복사했습니다.')
+    try {
+      await navigator.clipboard.writeText(buildReportText(date, data.crewName, data.members))
+      alert('보고 문구를 복사했습니다.')
+    } catch { setError('보고 문구를 복사하지 못했습니다. 브라우저의 클립보드 권한을 확인해주세요.') }
   }
 
   async function addStudent(event: FormEvent) {
     event.preventDefault()
     const name = newStudent.trim()
-    if (!name) return
-    await api.addStudent(crewId, name)
-    setNewStudent(''); await load()
+    if (!name || manageBusy) return
+    setManageBusy(true); setError('')
+    try { await api.addStudent(crewId, name); setNewStudent(''); await load() }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '학생을 추가하지 못했습니다.') }
+    finally { setManageBusy(false) }
   }
 
   async function changeMembership(member: AttendanceMember, status: 'active' | 'long_absence' | 'left') {
-    if (status === 'left' && !confirm(`${member.name} 학생을 크루 퇴실 처리할까요? 과거 기록은 보존됩니다.`)) return
-    await api.setMembershipStatus(member.membershipId, status)
-    await load()
+    if (manageBusy || (status === 'left' && !confirm(`${member.name} 학생을 크루 퇴실 처리할까요? 과거 기록은 보존됩니다.`))) return
+    setManageBusy(true); setError('')
+    try { await api.setMembershipStatus(member.membershipId, status); await load() }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '학생 상태를 변경하지 못했습니다.') }
+    finally { setManageBusy(false) }
   }
 
   async function correctAssistantName(event: FormEvent) {
     event.preventDefault()
     const normalized = assistantName.trim().replace(/\s+/g, ' ')
     if (!normalized) return
-    const corrected = await api.correctAssistantName(normalized)
-    setData(corrected); setNameEditOpen(false)
+    setManageBusy(true); setError('')
+    try { const corrected = await api.correctAssistantName(normalized); setData(corrected); setNameEditOpen(false) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '보조교사 이름을 수정하지 못했습니다.') }
+    finally { setManageBusy(false) }
   }
 
   return <main className="attendance-shell">
@@ -418,14 +454,14 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
         {data.announcements.map((item) => <article key={item.id}><Megaphone /><div><strong>{item.title}</strong><p>{item.body}</p></div></article>)}
       </section>}
       <section className="attendance-list" aria-label="학생 출석 명단">
-        {active.map((member) => <AttendanceRow key={member.membershipId} member={member} state={saveState[member.membershipId] ?? 'idle'} disabled={!online} onMark={mark} onDetails={() => setDetailMember(member)} />)}
+        {active.map((member) => <AttendanceRow key={member.membershipId} member={member} state={saveState[member.membershipId] ?? 'idle'} disabled={!online || bulkBusy || saveState[member.membershipId] === 'saving'} onMark={mark} onDetails={() => setDetailMember(member)} />)}
       </section>
       {!!longAbsent.length && <section className="long-absence-card">
         <button className="collapse-button" onClick={() => setLongOpen(!longOpen)} aria-expanded={longOpen}><span>장기결석 {longAbsent.length}명</span><ChevronDown className={longOpen ? 'rotate' : ''} /></button>
-        {longOpen && <div>{longAbsent.map((member) => <div className="long-row" key={member.membershipId}><span>{member.name}</span>{!assistantMode && <button onClick={() => changeMembership(member, 'active')}>복귀</button>}</div>)}</div>}
+        {longOpen && <div>{longAbsent.map((member) => <div className="long-row" key={member.membershipId}><span>{member.name}</span>{!assistantMode && <button disabled={manageBusy} onClick={() => changeMembership(member, 'active')}>복귀</button>}</div>)}</div>}
       </section>}
       <section className="attendance-actions">
-        {!!counts.unchecked && <button className="outline-danger" onClick={markUncheckedAbsent}>미체크 {counts.unchecked}명 모두 결석 처리</button>}
+        {!!counts.unchecked && <button className="outline-danger" disabled={!online || bulkBusy} onClick={markUncheckedAbsent}>{bulkBusy ? '일괄 저장 중…' : `미체크 ${counts.unchecked}명 모두 결석 처리`}</button>}
         <button className="primary-button" onClick={copyReport}><Clipboard /> 보고 문구 복사</button>
         {!assistantMode && <button className="secondary-button" onClick={() => setManageOpen(!manageOpen)}><Settings /> 학생 관리</button>}
         {!assistantMode && <button className="secondary-button" onClick={() => setPinChangeOpen(true)}><LockKeyhole /> 내 PIN 변경</button>}
@@ -433,11 +469,11 @@ function AttendancePage({ profile, initialSnapshot, assistantMode, online, onLog
       {!assistantMode && <TeacherNotificationControl />}
       {manageOpen && !assistantMode && <section className="management-card">
         <h2>학생 관리</h2>
-        <form className="inline-form" onSubmit={addStudent}><label htmlFor="new-student">새 학생 이름</label><div><input id="new-student" value={newStudent} onChange={(event) => setNewStudent(event.target.value)} /><button>추가</button></div></form>
-        <div className="manage-list">{active.map((member) => <div key={member.membershipId}><span>{member.name}</span><div><button onClick={() => changeMembership(member, 'long_absence')}>장기결석</button><button className="text-danger" onClick={() => changeMembership(member, 'left')}>퇴실</button></div></div>)}</div>
+        <form className="inline-form" onSubmit={addStudent}><label htmlFor="new-student">새 학생 이름</label><div><input id="new-student" disabled={manageBusy} value={newStudent} onChange={(event) => setNewStudent(event.target.value)} /><button disabled={manageBusy}>{manageBusy ? '처리 중…' : '추가'}</button></div></form>
+        <div className="manage-list">{active.map((member) => <div key={member.membershipId}><span>{member.name}</span><div><button disabled={manageBusy} onClick={() => changeMembership(member, 'long_absence')}>장기결석</button><button className="text-danger" disabled={manageBusy} onClick={() => changeMembership(member, 'left')}>퇴실</button></div></div>)}</div>
       </section>}
     </>}
-    {nameEditOpen && <div className="modal-backdrop"><form className="small-dialog" onSubmit={correctAssistantName}><button type="button" className="icon-button close-button" onClick={() => setNameEditOpen(false)} aria-label="닫기"><X /></button><h2>보조교사 이름 수정</h2><p>현재 세션의 표시 이름이 바뀌며 이전 이름도 변경 이력에 남습니다.</p><label htmlFor="corrected-name">보조교사 이름</label><input id="corrected-name" value={assistantName} onChange={(event) => setAssistantName(event.target.value)} /><button className="primary-button">이름 수정</button></form></div>}
+    {nameEditOpen && <div className="modal-backdrop"><form className="small-dialog" onSubmit={correctAssistantName}><button type="button" className="icon-button close-button" onClick={() => setNameEditOpen(false)} aria-label="닫기"><X /></button><h2>보조교사 이름 수정</h2><p>현재 세션의 표시 이름이 바뀌며 이전 이름도 변경 이력에 남습니다.</p><label htmlFor="corrected-name">보조교사 이름</label><input id="corrected-name" disabled={manageBusy} value={assistantName} onChange={(event) => setAssistantName(event.target.value)} /><button className="primary-button" disabled={manageBusy}>{manageBusy ? '수정 중…' : '이름 수정'}</button></form></div>}
     {pinChangeOpen && <PinChangeDialog onClose={() => setPinChangeOpen(false)} />}
     {detailMember && data && <StudentDetailsDialog member={detailMember} fields={data.customFields} assistantMode={assistantMode} onClose={() => setDetailMember(null)} onSave={async (details) => {
       const updated = await api.updateAttendanceDetails(data.sessionId, detailMember.membershipId, details, assistantMode)
@@ -482,9 +518,11 @@ function StudentDetailsDialog({ member, fields, assistantMode, onClose, onSave }
   const [note, setNote] = useState(member.specialNote ?? '')
   const [responses, setResponses] = useState<Record<string, string>>(member.customResponses ?? {})
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true)
+    event.preventDefault(); setBusy(true); setError('')
     try { await onSave({ absenceReason: reason.trim(), contactStatus: contact, specialNote: assistantMode ? undefined : note.trim(), customResponses: responses }) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '사유와 비고를 저장하지 못했습니다.') }
     finally { setBusy(false) }
   }
   return <div className="modal-backdrop"><form className="details-sheet" onSubmit={submit}>
@@ -495,6 +533,7 @@ function StudentDetailsDialog({ member, fields, assistantMode, onClose, onSave }
     {!assistantMode && <label>임원이 계속 알아야 할 학생 비고<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="예: 장학금 신청 서류 확인 필요" maxLength={1000} /></label>}
     {!!fields.length && <div className="temporary-fields"><h3>임원 요청 확인사항</h3>{fields.map((field) => <label key={field.id}>{field.title}{field.description && <small>{field.description}</small>}{field.fieldType === 'select' ? <select required={field.required} value={responses[field.id] ?? ''} onChange={(event) => setResponses({ ...responses, [field.id]: event.target.value })}><option value="">선택해주세요</option>{field.options.map((option) => <option key={option}>{option}</option>)}</select> : <input required={field.required} value={responses[field.id] ?? ''} onChange={(event) => setResponses({ ...responses, [field.id]: event.target.value })} />}</label>)}</div>}
     {assistantMode && <p className="privacy-note"><AlertTriangle size={16} />보조교사는 당일 사유와 임시 확인사항만 작성할 수 있습니다.</p>}
+    {error && <p className="inline-error" role="alert">{error}</p>}
     <button className="primary-button" disabled={busy}>{busy ? '저장 중…' : '사유·비고 저장'}</button>
   </form></div>
 }
@@ -508,16 +547,53 @@ function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfi
   const [rows, setRows] = useState<AttendanceExportRow[]>([])
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState('')
+  const [dashboardError, setDashboardError] = useState('')
+  const [eventRows, setEventRows] = useState<AttendanceEventRow[]>([])
+  const [eventsLoading, setEventsLoading] = useState(false)
+  const [eventsError, setEventsError] = useState('')
+  const dashboardSequence = useRef(0)
+  const eventsSequence = useRef(0)
 
   const load = async () => {
+    if (filters.from > filters.to) {
+      setDashboardError('시작일은 종료일보다 늦을 수 없습니다.')
+      return
+    }
+    const sequence = ++dashboardSequence.current
+    setDashboardError('')
     setLoading(true)
-    try { const data = await api.dashboard(filters); setSummary(data.summary); setRows(data.rows) }
-    finally { setLoading(false) }
+    try {
+      const data = await api.dashboard(filters)
+      if (sequence === dashboardSequence.current) { setSummary(data.summary); setRows(data.rows) }
+    } catch (reason) {
+      if (sequence === dashboardSequence.current) setDashboardError(reason instanceof Error ? reason.message : '출석 현황을 불러오지 못했습니다.')
+    } finally {
+      if (sequence === dashboardSequence.current) setLoading(false)
+    }
   }
   useEffect(() => { void load() }, [])
 
+  const loadEvents = async () => {
+    if (filters.from > filters.to) {
+      setEventsError('시작일은 종료일보다 늦을 수 없습니다.')
+      return
+    }
+    const sequence = ++eventsSequence.current
+    setEventsLoading(true); setEventsError('')
+    try {
+      const events = await api.attendanceEvents(filters)
+      if (sequence === eventsSequence.current) setEventRows(events)
+    } catch (reason) {
+      if (sequence === eventsSequence.current) setEventsError(reason instanceof Error ? reason.message : '변경 이력을 불러오지 못했습니다.')
+    } finally {
+      if (sequence === eventsSequence.current) setEventsLoading(false)
+    }
+  }
+  useEffect(() => { if (tab === 'events') void loadEvents() }, [tab])
+
   function csv() { downloadText(`새벽이슬_출석_${filters.from}_${filters.to}.csv`, rowsToCsv(rows), 'text/csv;charset=utf-8') }
-  function xlsx() {
+  async function xlsx() {
+    const { downloadRegistryWorkbook } = await import('./lib/registryXlsx')
     downloadRegistryWorkbook(`새벽이슬_교적부형식_출석_${filters.from}_${filters.to}.xlsx`, rows)
     setNotice('기존 교적부 형식의 Excel 파일을 만들었습니다. 개인정보 열은 빈칸으로 유지됩니다.')
   }
@@ -547,7 +623,7 @@ function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfi
       <div className="nav-user"><span>{profile.name}</span><small>임원 관리자</small><ThemeControl variant="nav" /><button onClick={onLogout}><LogOut />로그아웃</button></div>
     </aside>
     <main className="dashboard-main">
-      <header className="dashboard-header"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="메뉴"><Menu /></button><div><p className="eyebrow">임원 전용</p><h1>{nav.find(([id]) => id === tab)?.[1]}</h1></div><div className="export-buttons"><button onClick={txt}><Download />TXT</button><button onClick={csv}><Download />CSV</button><button onClick={xlsx}><Download />교적부 XLSX</button></div></header>
+      <header className="dashboard-header"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="메뉴"><Menu /></button><div><p className="eyebrow">임원 전용</p><h1>{nav.find(([id]) => id === tab)?.[1]}</h1></div>{(tab === 'overview' || tab === 'records') && <div className="export-buttons"><button onClick={txt}><Download />TXT</button><button onClick={csv}><Download />CSV</button><button onClick={() => void xlsx()}><Download />교적부 XLSX</button></div>}</header>
       {notice && <div className="notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="닫기"><X /></button></div>}
       {(tab === 'overview' || tab === 'records') && <>
         {tab === 'overview' && <AttendanceReminderPanel date={thisWeekSunday()} />}
@@ -560,12 +636,13 @@ function ExecutiveDashboard({ profile, onLogout }: { profile: AuthenticatedProfi
           <label>비고<select value={filters.notes} onChange={(event) => setFilters({ ...filters, notes: event.target.value })}><option value="">전체</option><option value="yes">비고 있는 학생만</option></select></label>
           <button className="filter-submit" onClick={load}><Search />조회</button>
         </section>
+        {dashboardError && <ErrorBlock message={dashboardError} onRetry={load} />}
         {summary && <section className="summary-grid"><SummaryCard label="운영 크루" value={`${summary.totalCrews}개`} /><SummaryCard label="등록 학생" value={`${summary.totalStudents}명`} /><SummaryCard label="출석" value={`${summary.present}명`} tone="green" /><SummaryCard label="결석" value={`${summary.absent}명`} tone="red" /><SummaryCard label="출석률" value={`${summary.attendanceRate}%`} tone="purple" /></section>}
         <RecordsTable rows={rows} loading={loading} />
       </>}
       {(tab === 'crews' || tab === 'teachers' || tab === 'students') && <AdminManagement tab={tab} onDone={() => { setNotice('저장했습니다.'); void load() }} />}
       {(tab === 'notices' || tab === 'feedback') && <ExecutiveWorkspace tab={tab} onNotice={setNotice} />}
-      {tab === 'events' && <section className="data-card"><div className="data-card-header"><h2>최근 변경 이력</h2><p>체크자와 변경 전후 상태를 시간순으로 확인합니다.</p></div><RecordsTable rows={rows} loading={loading} compact /></section>}
+      {tab === 'events' && <EventHistory rows={eventRows} loading={eventsLoading} error={eventsError} onRetry={loadEvents} />}
     </main>
   </div>
 }
@@ -574,18 +651,25 @@ function ExecutiveWorkspace({ tab, onNotice }: { tab: 'notices' | 'feedback'; on
   const [workspace, setWorkspace] = useState<{ announcements: AttendanceSnapshot['announcements']; customFields: AttendanceSnapshot['customFields']; feedback: FeedbackItem[] }>({ announcements: [], customFields: [], feedback: [] })
   const [form, setForm] = useState({ kind: 'announcement', title: '', body: '', options: '', activeFrom: new Date().toISOString().slice(0, 10), activeUntil: '', required: 'false' })
   const [busy, setBusy] = useState(false)
-  const load = () => api.adminWorkspace().then(setWorkspace)
+  const [error, setError] = useState('')
+  const load = async () => {
+    setError('')
+    try { setWorkspace(await api.adminWorkspace()) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '관리 정보를 불러오지 못했습니다.') }
+  }
   useEffect(() => { void load() }, [])
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true)
     try {
+      setError('')
       if (form.kind === 'announcement') await api.adminAction('admin-create-announcement', form)
       else await api.adminAction('admin-create-custom-field', { ...form, fieldType: 'select', options: form.options.split(',').map((value) => value.trim()).filter(Boolean), required: form.required === 'true' })
       setForm({ ...form, title: '', body: '', options: '' }); onNotice('새 항목을 게시했습니다.'); await load()
-    } finally { setBusy(false) }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '게시하지 못했습니다.') }
+    finally { setBusy(false) }
   }
-  if (tab === 'feedback') return <section className="data-card"><div className="data-card-header"><div><h2>교사 의견함</h2><p>새 의견부터 확인하고 처리 상태를 남겨주세요.</p></div></div><div className="feedback-list">{workspace.feedback.map((item) => <article key={item.id} className={item.status === 'new' ? 'new' : ''}><div><span className={`feedback-status ${item.status}`}>{item.status === 'new' ? '새 의견' : item.status === 'reviewing' ? '확인 중' : '완료'}</span><strong>{item.category} · {item.actorName}</strong><small>{item.page} · {item.createdAt.slice(0, 16).replace('T', ' ')}</small></div><p>{item.message}</p><select value={item.status} onChange={async (event) => { await api.adminAction('admin-update-feedback', { id: item.id, status: event.target.value }); await load() }}><option value="new">새 의견</option><option value="reviewing">확인 중</option><option value="done">완료</option></select></article>)}{!workspace.feedback.length && <p className="empty-result">접수된 의견이 없습니다.</p>}</div></section>
-  return <section className="workspace-grid"><form className="admin-form workspace-form" onSubmit={submit}><div><p className="eyebrow">임원 게시</p><h2>공지 또는 임시 확인 칸 만들기</h2><p>출석 화면에 즉시 보여줄 안내와 기간 한정 조사 항목을 만듭니다.</p></div><label>종류<select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })}><option value="announcement">공지</option><option value="custom">학생별 임시 확인 칸</option></select></label><label>제목<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="예: 수련회 참석 여부" /></label><label>설명<textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="교사에게 보여줄 안내" /></label>{form.kind === 'custom' && <><label>선택 항목(쉼표로 구분)<input required value={form.options} onChange={(event) => setForm({ ...form, options: event.target.value })} placeholder="신청, 미신청, 고려중" /></label><label>필수 입력<select value={form.required} onChange={(event) => setForm({ ...form, required: event.target.value })}><option value="false">선택</option><option value="true">필수</option></select></label></>}<div className="date-pair"><label>시작일<input type="date" required value={form.activeFrom} onChange={(event) => setForm({ ...form, activeFrom: event.target.value })} /></label><label>종료일<input type="date" required value={form.activeUntil} onChange={(event) => setForm({ ...form, activeUntil: event.target.value })} /></label></div><button className="primary-button" disabled={busy}>{busy ? '게시 중…' : '출석 화면에 게시'}</button></form><div className="workspace-current"><h2>현재 게시 중</h2>{workspace.announcements.map((item) => <article key={item.id}><Megaphone /><div><strong>{item.title}</strong><p>{item.body}</p><small>{item.activeFrom} ~ {item.activeUntil}</small></div></article>)}{workspace.customFields.map((item) => <article key={item.id}><ListPlus /><div><strong>{item.title}</strong><p>{item.options.join(' · ')}</p><small>{item.activeFrom} ~ {item.activeUntil}</small></div></article>)}</div></section>
+  if (tab === 'feedback') return <section className="data-card"><div className="data-card-header"><div><h2>교사 의견함</h2><p>새 의견부터 확인하고 처리 상태를 남겨주세요.</p></div></div>{error && <ErrorBlock message={error} onRetry={load} />}<div className="feedback-list">{workspace.feedback.map((item) => <article key={item.id} className={item.status === 'new' ? 'new' : ''}><div><span className={`feedback-status ${item.status}`}>{item.status === 'new' ? '새 의견' : item.status === 'reviewing' ? '확인 중' : '완료'}</span><strong>{item.category} · {item.actorName}</strong><small>{item.page} · {item.createdAt.slice(0, 16).replace('T', ' ')}</small></div><p>{item.message}</p><select value={item.status} onChange={async (event) => { try { setError(''); await api.adminAction('admin-update-feedback', { id: item.id, status: event.target.value }); await load() } catch (reason) { setError(reason instanceof Error ? reason.message : '처리 상태를 저장하지 못했습니다.') } }}><option value="new">새 의견</option><option value="reviewing">확인 중</option><option value="done">완료</option></select></article>)}{!workspace.feedback.length && <p className="empty-result">접수된 의견이 없습니다.</p>}</div></section>
+  return <><section className="workspace-grid"><form className="admin-form workspace-form" onSubmit={submit}><div><p className="eyebrow">임원 게시</p><h2>공지 또는 임시 확인 칸 만들기</h2><p>출석 화면에 즉시 보여줄 안내와 기간 한정 조사 항목을 만듭니다.</p></div><label>종류<select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })}><option value="announcement">공지</option><option value="custom">학생별 임시 확인 칸</option></select></label><label>제목<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="예: 수련회 참석 여부" /></label><label>설명<textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} placeholder="교사에게 보여줄 안내" /></label>{form.kind === 'custom' && <><label>선택 항목(쉼표로 구분)<input required value={form.options} onChange={(event) => setForm({ ...form, options: event.target.value })} placeholder="신청, 미신청, 고려중" /></label><label>필수 입력<select value={form.required} onChange={(event) => setForm({ ...form, required: event.target.value })}><option value="false">선택</option><option value="true">필수</option></select></label></>}<div className="date-pair"><label>시작일<input type="date" required value={form.activeFrom} onChange={(event) => setForm({ ...form, activeFrom: event.target.value })} /></label><label>종료일<input type="date" required value={form.activeUntil} onChange={(event) => setForm({ ...form, activeUntil: event.target.value })} /></label></div><button className="primary-button" disabled={busy}>{busy ? '게시 중…' : '출석 화면에 게시'}</button></form><div className="workspace-current"><h2>현재 게시 중</h2>{workspace.announcements.map((item) => <article key={item.id}><Megaphone /><div><strong>{item.title}</strong><p>{item.body}</p><small>{item.activeFrom} ~ {item.activeUntil}</small></div></article>)}{workspace.customFields.map((item) => <article key={item.id}><ListPlus /><div><strong>{item.title}</strong><p>{item.options.join(' · ')}</p><small>{item.activeFrom} ~ {item.activeUntil}</small></div></article>)}</div></section>{error && <ErrorBlock message={error} onRetry={load} />}</>
 }
 
 function AdminManagement({ tab, onDone }: { tab: 'crews' | 'teachers' | 'students'; onDone: () => void }) {
@@ -598,38 +682,43 @@ function AdminManagement({ tab, onDone }: { tab: 'crews' | 'teachers' | 'student
   const [resetPins, setResetPins] = useState<Record<string, string>>({})
   const [moveTargets, setMoveTargets] = useState<Record<string, string>>({})
   const [studentSearch, setStudentSearch] = useState('')
+  const [error, setError] = useState('')
 
   async function load() {
-    const data = await api.adminWorkspace()
-    setWorkspace(data)
-    setCrewTeachers(Object.fromEntries(data.crews.map((crew) => [crew.id, crew.teacherId ?? ''])))
+    setError('')
+    try {
+      const data = await api.adminWorkspace()
+      setWorkspace(data)
+      setCrewTeachers(Object.fromEntries(data.crews.map((crew) => [crew.id, crew.teacherId ?? ''])))
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '관리 목록을 불러오지 못했습니다.') }
   }
   useEffect(() => { void load() }, [tab])
 
-  async function run(action: string, payload: Record<string, unknown>, confirmation?: string) {
-    if (confirmation && !window.confirm(confirmation)) return
-    setBusy(true)
-    try { await api.adminAction(action, payload); await load(); onDone() }
-    catch (reason) { window.alert(reason instanceof Error ? reason.message : '저장하지 못했습니다.') }
+  async function run(action: string, payload: Record<string, unknown>, confirmation?: string): Promise<boolean> {
+    if (confirmation && !window.confirm(confirmation)) return false
+    setBusy(true); setError('')
+    try { await api.adminAction(action, payload); await load(); onDone(); return true }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '저장하지 못했습니다.'); return false }
     finally { setBusy(false) }
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
-    try {
-      if (tab === 'crews') await run('admin-manage-crew', { operation: 'create', name, year: Number(extra) || new Date().getFullYear() })
-      if (tab === 'teachers') await run('admin-create-user', { name, pin, role: extra || 'teacher' })
-      if (tab === 'students') await run('admin-manage-student', { operation: 'create', name, crewId: extra })
-      setName(''); setPin(''); setExtra('')
-    } catch { /* run() reports a clear message */ }
+    const succeeded = tab === 'crews'
+      ? await run('admin-manage-crew', { operation: 'create', name, year: Number(extra) || new Date().getFullYear() })
+      : tab === 'teachers'
+        ? await run('admin-create-user', { name, pin, role: extra || 'teacher' })
+        : await run('admin-manage-student', { operation: 'create', name, crewId: extra })
+    if (succeeded) { setName(''); setPin(''); setExtra('') }
   }
 
-  if (!workspace) return <LoadingBlock label="관리 목록을 불러오는 중" />
+  if (!workspace) return error ? <ErrorBlock message={error} onRetry={load} /> : <LoadingBlock label="관리 목록을 불러오는 중" />
   const activeCrews = workspace.crews.filter((crew) => crew.active)
   const teachers = workspace.users.filter((user) => user.role === 'teacher' && user.active)
   const visibleMemberships = workspace.memberships.filter((member) => member.studentName.includes(studentSearch.trim()))
 
   return <section className="management-stack">
+    {error && <ErrorBlock message={error} onRetry={load} />}
     <div className="management-page">
       <div className="management-intro"><h2>{tab === 'crews' ? '새 크루 만들기' : tab === 'teachers' ? '교사·임원 등록' : '학생 등록'}</h2><p>이름을 보고 선택할 수 있도록 구성했습니다. 기존 기록은 삭제하지 않습니다.</p></div>
       <form className="admin-form" onSubmit={submit}>
@@ -648,6 +737,14 @@ function AdminManagement({ tab, onDone }: { tab: 'crews' | 'teachers' | 'student
     {tab === 'teachers' && <div className="management-list"><h2>등록된 교사</h2>{workspace.users.map((user) => <article key={user.id} className={!user.active ? 'inactive' : ''}><div><strong>{user.name}</strong><small>{user.role === 'executive' ? '임원교사' : '담당교사'} · {user.active ? '사용 중' : '비활성'}</small></div><div className="management-actions"><input aria-label={`${user.name} 새 PIN`} inputMode="numeric" placeholder="새 PIN" value={resetPins[user.id] ?? ''} onChange={(event) => setResetPins({ ...resetPins, [user.id]: event.target.value.replace(/\D/g, '').slice(0, 6) })} /><button disabled={busy || (resetPins[user.id]?.length ?? 0) < 4} onClick={() => void run('admin-reset-pin', { profileId: user.id, pin: resetPins[user.id] }, `${user.name} 선생님의 PIN을 초기화할까요?`)}>PIN 초기화</button><button className={user.active ? 'danger-button' : ''} disabled={busy} onClick={() => void run('admin-manage-user', { operation: 'set-active', profileId: user.id, active: !user.active }, `${user.name} 계정을 ${user.active ? '비활성화' : '다시 활성화'}할까요?`)}>{user.active ? '비활성화' : '활성화'}</button></div></article>)}</div>}
 
     {tab === 'students' && <div className="management-list"><div className="management-list-header"><h2>학생 상태와 크루 이동</h2><input aria-label="학생 이름 검색" placeholder="학생 이름 검색" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></div>{visibleMemberships.map((member) => <article key={member.id}><div><strong>{member.studentName}</strong><small>{member.crewName} · {membershipLabel(member.status)}</small></div><div className="management-actions"><select aria-label={`${member.studentName} 상태`} value={member.status} onChange={(event) => void run('admin-manage-student', { operation: 'status', membershipId: member.id, status: event.target.value }, event.target.value === 'left' ? `${member.studentName} 학생을 퇴실 처리할까요?` : undefined)}><option value="active">활동</option><option value="long_absence">장기결석</option><option value="left">퇴실</option></select><select aria-label={`${member.studentName} 이동할 크루`} value={moveTargets[member.id] ?? ''} onChange={(event) => setMoveTargets({ ...moveTargets, [member.id]: event.target.value })}><option value="">이동할 크루</option>{activeCrews.filter((crew) => crew.id !== member.crewId).map((crew) => <option key={crew.id} value={crew.id}>{crew.name}</option>)}</select><button disabled={busy || !moveTargets[member.id]} onClick={() => void run('admin-manage-student', { operation: 'move', membershipId: member.id, targetCrewId: moveTargets[member.id] }, `${member.studentName} 학생을 선택한 크루로 이동할까요?`)}>크루 이동</button></div></article>)}{!visibleMemberships.length && <p className="empty-result">해당 학생이 없습니다.</p>}</div>}
+  </section>
+}
+
+function EventHistory({ rows, loading, error, onRetry }: { rows: AttendanceEventRow[]; loading: boolean; error: string; onRetry: () => void }) {
+  return <section className="data-card">
+    <div className="data-card-header"><div><h2>실제 변경 이력</h2><p>출석 상태와 상세 정보가 변경된 시점·체크자를 최신순으로 보여줍니다.</p></div><button className="event-refresh" disabled={loading} onClick={onRetry}><RefreshCw className={loading ? 'spin' : ''} />새로고침</button></div>
+    {error && <ErrorBlock message={error} onRetry={onRetry} />}
+    {loading ? <LoadingBlock label="변경 이력을 불러오는 중" /> : <div className="table-scroll"><table className="event-table"><thead><tr><th>변경시각</th><th>출석일</th><th>크루</th><th>학생</th><th>변경 내용</th><th>체크자</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td>{row.createdAt.slice(0, 16).replace('T', ' ')}</td><td>{row.attendanceDate}</td><td>{row.crewName}</td><td><strong>{row.studentName || '-'}</strong></td><td>{eventDescription(row)}</td><td>{row.actorName}<small>{row.actorType}</small></td></tr>)}</tbody></table>{!rows.length && <p className="empty-result">조회 기간에 변경 이력이 없습니다.</p>}</div>}
   </section>
 }
 
@@ -677,12 +774,14 @@ function FeedbackDialog({ actorName, actorRole, page, onClose }: { actorName: st
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [sent, setSent] = useState(false)
+  const [error, setError] = useState('')
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true)
+    event.preventDefault(); setBusy(true); setError('')
     try { await api.submitFeedback({ actorName, actorRole, category, message: message.trim(), page }); setSent(true) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '의견을 보내지 못했습니다.') }
     finally { setBusy(false) }
   }
-  return <div className="modal-backdrop"><form className="small-dialog feedback-dialog" onSubmit={submit}><button type="button" className="icon-button close-button" onClick={onClose} aria-label="닫기"><X /></button>{sent ? <><Check className="sent-icon" /><h2>의견을 보냈습니다</h2><p>임원 화면의 의견함에 저장되었습니다. 확인 후 처리 상태를 남길 수 있습니다.</p><button type="button" className="primary-button" onClick={onClose}>확인</button></> : <><p className="eyebrow">빠른 피드백</p><h2>오류·개선 의견 보내기</h2><p>어려웠던 점이나 바꾸면 좋을 점을 편하게 적어주세요.</p><label>종류<select value={category} onChange={(event) => setCategory(event.target.value)}><option>오류 신고</option><option>사용이 어려움</option><option>개선 의견</option><option>기타</option></select></label><label>내용<textarea required minLength={5} maxLength={1000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="예: 학생 이름을 찾기가 어려웠습니다." /></label><button className="primary-button" disabled={busy}>{busy ? '보내는 중…' : '임원에게 보내기'}</button></>}</form></div>
+  return <div className="modal-backdrop"><form className="small-dialog feedback-dialog" onSubmit={submit}><button type="button" className="icon-button close-button" onClick={onClose} aria-label="닫기"><X /></button>{sent ? <><Check className="sent-icon" /><h2>의견을 보냈습니다</h2><p>임원 화면의 의견함에 저장되었습니다. 확인 후 처리 상태를 남길 수 있습니다.</p><button type="button" className="primary-button" onClick={onClose}>확인</button></> : <><p className="eyebrow">빠른 피드백</p><h2>오류·개선 의견 보내기</h2><p>어려웠던 점이나 바꾸면 좋을 점을 편하게 적어주세요.</p><label>종류<select value={category} onChange={(event) => setCategory(event.target.value)}><option>오류 신고</option><option>사용이 어려움</option><option>개선 의견</option><option>기타</option></select></label><label>내용<textarea required minLength={5} maxLength={1000} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="예: 학생 이름을 찾기가 어려웠습니다." /></label>{error && <p className="inline-error" role="alert">{error}</p>}<button className="primary-button" disabled={busy}>{busy ? '보내는 중…' : '임원에게 보내기'}</button></>}</form></div>
 }
 
 function SummaryCard({ label, value, tone = '' }: { label: string; value: string; tone?: string }) { return <article className={`summary-card ${tone}`}><span>{label}</span><strong>{value}</strong></article> }
@@ -691,5 +790,12 @@ function ErrorBlock({ message, onRetry }: { message: string; onRetry?: () => voi
 function attendanceLabel(value: string) { return value === 'present' ? '출석' : value === 'absent' ? '결석' : '미체크' }
 function membershipLabel(value: string) { return value === 'active' ? '활동' : value === 'long_absence' ? '장기결석' : '퇴실' }
 function contactLabel(value?: ContactStatus) { return value === 'no_answer' ? '연락 안 됨' : value === 'contacted' ? '연락 완료' : value === 'other' ? '기타' : '아직 연락 안 함' }
+function eventDescription(row: AttendanceEventRow) {
+  if (row.eventType === 'details_updated') return '사유·비고 수정'
+  if (row.eventType === 'assistant_name_corrected') return '보조교사 이름 수정'
+  if (row.eventType === 'legacy_import') return '기존 기록 이관'
+  if (row.oldStatus || row.newStatus) return `${attendanceLabel(row.oldStatus ?? 'unchecked')} → ${attendanceLabel(row.newStatus ?? 'unchecked')}`
+  return row.eventType
+}
 
 export default App

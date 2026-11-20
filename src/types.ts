@@ -134,6 +134,19 @@ export interface AttendanceExportRow {
   hasImportantNote?: boolean
 }
 
+export interface AttendanceEventRow {
+  id: string
+  attendanceDate: string
+  crewName: string
+  studentName: string
+  eventType: string
+  oldStatus?: AttendanceStatus
+  newStatus?: AttendanceStatus
+  actorType: Actor['type']
+  actorName: string
+  createdAt: string
+}
+
 export interface DashboardSummary {
   totalCrews: number
   totalStudents: number

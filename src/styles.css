@@ -352,6 +352,9 @@ td small { display: block; color: var(--muted); font-size: 10px; }
 .feedback-fab { position: fixed; z-index: 35; right: max(15px, env(safe-area-inset-right)); bottom: max(15px, env(safe-area-inset-bottom)); min-height: 48px; display: inline-flex; align-items: center; gap: 7px; padding: 0 15px; border: 1px solid #3e176f; border-radius: 999px; background: var(--primary-dark); color: #fff; box-shadow: 0 8px 24px rgba(45, 16, 78, .28); font-size: 13px; font-weight: 800; }
 .feedback-fab svg { width: 18px; }
 .feedback-dialog .sent-icon { width: 54px; height: 54px; padding: 12px; border-radius: 50%; background: var(--green-soft); color: var(--green); }
+.event-refresh { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font-weight: 800; }
+.event-refresh svg { width: 18px; }
+.event-table td:first-child { white-space: nowrap; }
 
 .pwa-install-launcher { position: fixed; z-index: 35; left: max(15px, env(safe-area-inset-left)); bottom: max(15px, env(safe-area-inset-bottom)); min-height: 54px; display: inline-flex; align-items: center; gap: 10px; padding: 7px 15px 7px 12px; border: 2px solid #6d28d9; border-radius: 17px; background: #fff; color: #3b0764; box-shadow: 0 8px 24px rgba(45, 16, 78, .2); text-align: left; transition: border-color .18s, background .18s, box-shadow .18s; }
 .pwa-install-launcher:hover { border-color: #4c1d95; background: #faf5ff; box-shadow: 0 10px 28px rgba(45, 16, 78, .26); }
@@ -586,7 +589,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .attendance-header { gap: 4px; padding-right: 10px; padding-left: 12px; }
   .header-user { max-width: 108px; overflow: hidden; }
   .header-user span, .header-user small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pwa-install-launcher { bottom: calc(72px + env(safe-area-inset-bottom)); min-height: 50px; padding: 5px 12px 5px 10px; }
+  .pwa-install-launcher { bottom: max(15px, env(safe-area-inset-bottom)); min-height: 50px; padding: 5px 12px 5px 10px; }
   .pwa-install-launcher small { display: none; }
   .pwa-install-dialog { border-radius: 28px 28px 0 0; }
   .pwa-update-notice { grid-template-columns: 1fr 44px; }
@@ -602,7 +605,7 @@ td small { display: block; color: var(--muted); font-size: 10px; }
   .summary-card:last-child { grid-column: 1 / -1; }
   .data-card { border-radius: 13px; }
   .feedback-list article { grid-template-columns: 1fr; gap: 9px; }
-  .feedback-fab { max-width: calc(100vw - 30px); }
+  .feedback-fab { position: static; width: calc(100% - 30px); max-width: 730px; justify-content: center; margin: 14px auto max(20px, env(safe-area-inset-bottom)); }
 }
 
 @media (max-width: 370px) {

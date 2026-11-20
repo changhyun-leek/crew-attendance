@@ -44,4 +44,12 @@ describe('설치형 웹앱 설정', () => {
     expect(statSync(join(process.cwd(), 'public/desktop-icon-512x512.png')).size).toBeGreaterThan(10_000)
     expect(statSync(join(process.cwd(), 'public/favicon.ico')).size).toBeGreaterThan(1_000)
   })
+
+  it('설치를 출석의 필수 단계처럼 안내하지 않는다', () => {
+    const installUi = projectFile('src/PwaInstall.tsx')
+
+    expect(installUi).toContain('홈 화면 바로가기')
+    expect(installUi).toContain('선택 기능')
+    expect(installUi).toContain('설치 없이도 지금 열린 링크에서 바로 출석할 수 있습니다.')
+  })
 })

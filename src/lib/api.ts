@@ -1,6 +1,7 @@
 import { createClient, FunctionsHttpError } from '@supabase/supabase-js'
 import type {
   AttendanceExportRow,
+  AttendanceEventRow,
   AttendanceSnapshot,
   AttendanceStatus,
   AuthenticatedProfile,
@@ -16,7 +17,7 @@ import type {
   PushConfig,
   ReminderSendResult,
 } from '../types'
-import { demoCards, demoExecutive, demoRows, demoSnapshot, demoSummary } from './mock'
+import { demoCards, demoEvents, demoExecutive, demoRows, demoSnapshot, demoSummary } from './mock'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? 'https://zzavmguguvuqgdblmkcj.supabase.co'
 const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? 'sb_publishable_VY0sNxSFQgHMSItmR5q5pw_4tpdrxWb'
@@ -162,6 +163,10 @@ export const api = {
 
   async dashboard(filters: Record<string, string>): Promise<{ summary: DashboardSummary; rows: AttendanceExportRow[] }> {
     return isDemoMode ? { summary: demoSummary, rows: demoRows } : invoke('dashboard', filters)
+  },
+
+  async attendanceEvents(filters: Record<string, string>): Promise<AttendanceEventRow[]> {
+    return isDemoMode ? demoEvents : invoke<AttendanceEventRow[]>('attendance-events', filters)
   },
 
   async reminderStatus(date: string): Promise<AttendanceReminderCrew[]> {

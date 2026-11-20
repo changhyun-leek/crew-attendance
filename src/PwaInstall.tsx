@@ -156,7 +156,7 @@ export function PwaInstallControl() {
       setInstalled(true)
       setOpen(false)
     } else {
-      setMessage('설치가 취소되었습니다. 필요할 때 다시 설치 버튼을 눌러주세요.')
+      setMessage('추가가 취소되었습니다. 필요할 때 다시 열어주세요.')
     }
     setPromptEvent(null)
   }
@@ -164,20 +164,20 @@ export function PwaInstallControl() {
   const PlatformIcon = environment.platform === 'desktop' ? Monitor : Smartphone
 
   return <>
-    <button className="pwa-install-launcher" onClick={() => setOpen(true)} aria-label="휴대폰 또는 컴퓨터에 출석관리 설치하기">
+    <button className="pwa-install-launcher" onClick={() => setOpen(true)} aria-label="홈 화면 바로가기 안내 열기, 선택 기능">
       <Download aria-hidden="true" />
-      <span><strong>앱 설치</strong><small>휴대폰·컴퓨터</small></span>
+      <span><strong>홈 화면 바로가기</strong><small>선택 기능</small></span>
     </button>
     {open && <div className="modal-backdrop pwa-modal-backdrop" role="presentation">
       <section className="small-dialog pwa-install-dialog" role="dialog" aria-modal="true" aria-labelledby="pwa-install-title">
         <button type="button" className="icon-button close-button" onClick={() => setOpen(false)} aria-label="설치 안내 닫기"><X /></button>
         <div className="pwa-dialog-icon"><PlatformIcon aria-hidden="true" /></div>
-        <p className="eyebrow">한 번 설치하면 더 편리합니다</p>
-        <h2 id="pwa-install-title">휴대폰·컴퓨터에 설치</h2>
-        <p className="pwa-install-copy">홈 화면이나 바탕 화면의 아이콘을 누르면 주소를 다시 찾지 않고 출석관리를 바로 열 수 있습니다.</p>
+        <p className="eyebrow">선택 기능</p>
+        <h2 id="pwa-install-title">홈 화면 바로가기</h2>
+        <p className="pwa-install-copy"><strong>설치 없이도 지금 열린 링크에서 바로 출석할 수 있습니다.</strong><br />원할 때만 홈 화면이나 바탕 화면에 아이콘을 추가해 더 빠르게 열어보세요.</p>
         {environment.inAppBrowser && <div className="pwa-browser-warning" role="status"><ExternalLink aria-hidden="true" /><span>카카오톡 안에서는 설치가 제한될 수 있습니다. 먼저 다른 브라우저로 열어주세요.</span></div>}
-        {promptEvent ? <button type="button" className="primary-button pwa-install-now" onClick={() => void install()}><Download aria-hidden="true" />지금 이 기기에 설치하기</button> : <div className="pwa-manual-guide">
-          <div className="pwa-guide-title"><Share2 aria-hidden="true" /><strong>이 기기에서 설치하는 순서</strong></div>
+        {promptEvent ? <button type="button" className="primary-button pwa-install-now" onClick={() => void install()}><Download aria-hidden="true" />홈 화면에 추가하기 (선택)</button> : <div className="pwa-manual-guide">
+          <div className="pwa-guide-title"><Share2 aria-hidden="true" /><strong>바로가기를 추가하려면</strong></div>
           <ol>{steps.map((step) => <li key={step}>{step}</li>)}</ol>
         </div>}
         {message && <p className="inline-error" role="status">{message}</p>}

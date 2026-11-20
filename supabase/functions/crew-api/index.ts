@@ -464,7 +464,10 @@ async function addStudent(req: Request, body: Json) {
   if (error) throw error
   const { data: maxSort } = await admin.from('crew_memberships').select('sort_order').eq('crew_id', crewId).order('sort_order', { ascending: false }).limit(1).maybeSingle()
   const { error: memberError } = await admin.from('crew_memberships').insert({ student_id: student.id, crew_id: crewId, sort_order: Number(maxSort?.sort_order ?? -1) + 1 })
-  if (memberError) throw memberError
+  if (memberError) {
+    await admin.from('students').delete().eq('id', student.id)
+    throw memberError
+  }
   return { ok: true }
 }
 
@@ -525,6 +528,48 @@ async function dashboard(req: Request, body: Json) {
   return { summary: { totalCrews: new Set(rows.map((row: any) => row.crewName)).size, totalStudents: new Set(rows.map((row: any) => `${row.crewName}:${row.studentName}`)).size, present, absent, unchecked, attendanceRate: counted ? Math.round((present / counted) * 1000) / 10 : 0 }, rows }
 }
 
+async function attendanceEvents(req: Request, body: Json) {
+  await requireExecutive(req)
+  const from = validDate(body.from) ? body.from : kstDate()
+  const to = validDate(body.to) ? body.to : from
+  if (from > to) throw new Error('시작일은 종료일보다 늦을 수 없습니다.')
+  const { data: sessions, error: sessionsError } = await admin.from('attendance_sessions').select('id,attendance_date,crew_id,crews(name)').gte('attendance_date', from).lte('attendance_date', to)
+  if (sessionsError) throw sessionsError
+  const sessionMap = new Map((sessions ?? []).map((session: any) => [session.id, session]))
+  const sessionIds = [...sessionMap.keys()]
+  if (!sessionIds.length) return []
+  const { data: events, error } = await admin.from('attendance_events').select(`
+    id,session_id,membership_id,event_type,old_status,new_status,actor_type,actor_name_snapshot,created_at,
+    crew_memberships(status,students(display_name))
+  `).in('session_id', sessionIds).order('created_at', { ascending: false }).limit(1000)
+  if (error) throw error
+  let rows = (events ?? []).map((event: any) => {
+    const session: any = sessionMap.get(event.session_id)
+    const membership: any = firstRelation(event.crew_memberships)
+    const student: any = firstRelation(membership?.students)
+    return {
+      id: String(event.id),
+      attendanceDate: session.attendance_date,
+      crewName: firstRelation<{ name: string }>(session.crews)?.name ?? '',
+      studentName: student?.display_name ?? '',
+      eventType: event.event_type,
+      oldStatus: event.old_status ?? undefined,
+      newStatus: event.new_status ?? undefined,
+      actorType: event.actor_type,
+      actorName: event.actor_name_snapshot,
+      createdAt: event.created_at,
+    }
+  })
+  const crew = String(body.crew ?? '').trim()
+  const student = String(body.student ?? '').trim()
+  const actor = String(body.actor ?? '').trim()
+  if (crew) rows = rows.filter((row: any) => row.crewName.includes(crew))
+  if (student) rows = rows.filter((row: any) => row.studentName.includes(student))
+  if (body.status) rows = rows.filter((row: any) => row.newStatus === body.status)
+  if (actor) rows = rows.filter((row: any) => row.actorName.includes(actor))
+  return rows
+}
+
 async function createUser(req: Request, body: Json, bootstrap = false) {
   if (bootstrap) {
     const { count } = await admin.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'executive')
@@ -541,7 +586,12 @@ async function createUser(req: Request, body: Json, bootstrap = false) {
   if (authError || !authData.user) throw authError ?? new Error('인증 계정을 만들지 못했습니다.')
   const { error: profileError } = await admin.from('profiles').insert({ id: profileId, auth_user_id: authData.user.id, display_name: name, role })
   if (profileError) { await admin.auth.admin.deleteUser(authData.user.id); throw profileError }
-  await admin.from('teacher_credentials').insert({ profile_id: profileId, auth_email: authEmail })
+  const { error: credentialError } = await admin.from('teacher_credentials').insert({ profile_id: profileId, auth_email: authEmail })
+  if (credentialError) {
+    await admin.from('profiles').delete().eq('id', profileId)
+    await admin.auth.admin.deleteUser(authData.user.id)
+    throw credentialError
+  }
   return { id: profileId, name, role }
 }
 
@@ -889,12 +939,25 @@ async function manageCrew(req: Request, body: Json) {
   if (body.operation === 'create') {
     const name = cleanName(body.name)
     if (!name) throw new Error('크루명을 입력해주세요.')
-    const { error } = await admin.from('crews').insert({ name, operating_year: Number(body.year) || new Date().getFullYear() })
+    const operatingYear = Number(body.year) || new Date().getFullYear()
+    const { data: sameYear, error: lookupError } = await admin.from('crews').select('name').eq('operating_year', operatingYear)
+    if (lookupError) throw lookupError
+    if ((sameYear ?? []).some((crew: any) => crewNameKey(crew.name) === crewNameKey(name))) throw new Error('띄어쓰기만 다른 같은 이름의 크루가 이미 있습니다.')
+    const { error } = await admin.from('crews').insert({ name, operating_year: operatingYear })
     if (error) throw error
   } else if (body.operation === 'assign') {
-    await admin.from('crew_assignments').update({ ends_on: kstDate() }).or(`crew_id.eq.${body.crewId},profile_id.eq.${body.profileId}`).is('ends_on', null)
-    const { error } = await admin.from('crew_assignments').insert({ crew_id: body.crewId, profile_id: body.profileId, starts_on: kstDate(), is_primary: true })
-    if (error) throw error
+    const crewId = String(body.crewId ?? '')
+    const profileId = String(body.profileId ?? '')
+    if (!crewId || !profileId) throw new Error('크루와 담당교사를 확인해주세요.')
+    const today = kstDate()
+    const { data: closed, error: closeError } = await admin.from('crew_assignments').update({ ends_on: today }).or(`crew_id.eq.${crewId},profile_id.eq.${profileId}`).is('ends_on', null).select('id')
+    if (closeError) throw closeError
+    const { error } = await admin.from('crew_assignments').insert({ crew_id: crewId, profile_id: profileId, starts_on: today, is_primary: true })
+    if (error) {
+      const closedIds = (closed ?? []).map((assignment: any) => assignment.id)
+      if (closedIds.length) await admin.from('crew_assignments').update({ ends_on: null }).in('id', closedIds)
+      throw error
+    }
   } else if (body.operation === 'end') {
     const { error } = await admin.from('crews').update({ active: false, ended_at: kstDate() }).eq('id', body.crewId)
     if (error) throw error
@@ -923,11 +986,19 @@ async function manageStudent(req: Request, body: Json) {
   if (body.operation === 'move') {
     const targetCrewId = String(body.targetCrewId ?? '')
     if (!targetCrewId || targetCrewId === membership.crew_id) throw new Error('이동할 다른 크루를 선택해주세요.')
-    const { data: maxSort } = await admin.from('crew_memberships').select('sort_order').eq('crew_id', targetCrewId).order('sort_order', { ascending: false }).limit(1).maybeSingle()
-    const { error: endError } = await admin.from('crew_memberships').update({ status: 'left', status_changed_on: kstDate(), ended_on: kstDate(), updated_at: new Date().toISOString() }).eq('id', membership.id)
-    if (endError) throw endError
-    const { error: insertError } = await admin.from('crew_memberships').insert({ student_id: membership.student_id, crew_id: targetCrewId, sort_order: Number(maxSort?.sort_order ?? -1) + 1 })
+    const [{ data: targetCrew, error: crewError }, { data: maxSort, error: sortError }] = await Promise.all([
+      admin.from('crews').select('id').eq('id', targetCrewId).eq('active', true).single(),
+      admin.from('crew_memberships').select('sort_order').eq('crew_id', targetCrewId).order('sort_order', { ascending: false }).limit(1).maybeSingle(),
+    ])
+    if (crewError || !targetCrew) throw new Error('이동할 크루가 현재 운영 중인지 확인해주세요.')
+    if (sortError) throw sortError
+    const { data: created, error: insertError } = await admin.from('crew_memberships').insert({ student_id: membership.student_id, crew_id: targetCrewId, sort_order: Number(maxSort?.sort_order ?? -1) + 1 }).select('id').single()
     if (insertError) throw insertError
+    const { error: endError } = await admin.from('crew_memberships').update({ status: 'left', status_changed_on: kstDate(), ended_on: kstDate(), updated_at: new Date().toISOString() }).eq('id', membership.id)
+    if (endError) {
+      await admin.from('crew_memberships').delete().eq('id', created.id)
+      throw endError
+    }
     return { ok: true }
   }
   throw new Error('지원하지 않는 작업입니다.')
@@ -1061,6 +1132,7 @@ async function handleRequest(req: Request) {
       'add-student': () => addStudent(req, body),
       'set-membership-status': () => setMembershipStatus(req, body),
       'dashboard': () => dashboard(req, body),
+      'attendance-events': () => attendanceEvents(req, body),
       'admin-workspace': () => adminWorkspace(req),
       'admin-reminder-status': () => reminderStatus(req, body),
       'admin-send-attendance-reminder': () => sendAttendanceReminder(req, body),

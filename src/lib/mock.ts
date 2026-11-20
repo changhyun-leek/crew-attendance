@@ -1,4 +1,4 @@
-import type { AttendanceExportRow, AttendanceSnapshot, AuthenticatedProfile, CrewLoginCard, DashboardSummary } from '../types'
+import type { AttendanceEventRow, AttendanceExportRow, AttendanceSnapshot, AuthenticatedProfile, CrewLoginCard, DashboardSummary } from '../types'
 import { thisWeekSunday } from './date'
 
 export const demoCards: CrewLoginCard[] = [
@@ -38,15 +38,6 @@ export function demoSnapshot(actorName = '이창현', actorType: 'teacher' | 'as
 
 export const demoExecutive: AuthenticatedProfile = { id: 'executive-1', name: '임원 관리자', role: 'executive' }
 
-export const demoSummary: DashboardSummary = {
-  totalCrews: 3,
-  totalStudents: 18,
-  present: 12,
-  absent: 4,
-  unchecked: 2,
-  attendanceRate: 75,
-}
-
 const changhyunRows: AttendanceExportRow[] = demoNames.slice(0, 5).map((name, index) => ({
   attendanceDate: thisWeekSunday(),
   crewName: '이창현 크루',
@@ -80,3 +71,29 @@ const graceRows: AttendanceExportRow[] = ['강유준', '김하람', '신일결']
 }))
 
 export const demoRows: AttendanceExportRow[] = [...changhyunRows, ...graceRows]
+
+const demoPresent = demoRows.filter((row) => row.attendanceStatus === 'present').length
+const demoAbsent = demoRows.filter((row) => row.attendanceStatus === 'absent').length
+const demoUnchecked = demoRows.filter((row) => row.attendanceStatus === 'unchecked').length
+
+export const demoSummary: DashboardSummary = {
+  totalCrews: new Set(demoRows.map((row) => row.crewName)).size,
+  totalStudents: new Set(demoRows.map((row) => `${row.crewName}:${row.studentName}`)).size,
+  present: demoPresent,
+  absent: demoAbsent,
+  unchecked: demoUnchecked,
+  attendanceRate: Math.round(demoPresent / (demoPresent + demoAbsent) * 1000) / 10,
+}
+
+export const demoEvents: AttendanceEventRow[] = demoRows.slice(0, 6).map((row, index) => ({
+  id: `event-${index}`,
+  attendanceDate: row.attendanceDate,
+  crewName: row.crewName,
+  studentName: row.studentName,
+  eventType: row.attendanceStatus === 'unchecked' ? 'unmark' : 'mark',
+  oldStatus: 'unchecked',
+  newStatus: row.attendanceStatus,
+  actorType: row.actorType,
+  actorName: row.actorName,
+  createdAt: row.updatedAt,
+}))
